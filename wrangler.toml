@@ -1,0 +1,8 @@
+name = "the-mic-drops"
+pages_build_output_dir = "dist"
+
+[build]
+command = "npm run build"
+
+# Set these in the Cloudflare Pages dashboard under Settings > Environment Variables > Build time
+# VITE_API_URL = "https://api.your-domain.com"

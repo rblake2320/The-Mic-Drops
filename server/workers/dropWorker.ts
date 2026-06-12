@@ -1,0 +1,48 @@
+import { Worker } from "bullmq";
+import { redisConnectionOptions } from "../queues/dispatcher.js";
+import { sendDropToSubscribers } from "../push/index.js";
+import { db } from "../db.js";
+
+export function startDropWorker(): Worker | null {
+  if (!redisConnectionOptions) {
+    console.warn("[Worker] Redis options not available — drop worker not started");
+    return null;
+  }
+
+  let worker: Worker;
+  try {
+    worker = new Worker(
+      "drop-dispatch",
+      async (job) => {
+        const { dropId } = job.data as { dropId: string };
+        console.log(`[Worker] Processing drop ${dropId}`);
+
+        await db.drop.update({
+          where: { id: dropId },
+          data: { status: "SENT", sentAt: new Date() },
+        });
+
+        await sendDropToSubscribers(dropId);
+      },
+      { connection: redisConnectionOptions, concurrency: 5 }
+    );
+
+    worker.on("completed", (job) => {
+      console.log(`[Worker] Drop ${job.data.dropId} dispatched`);
+    });
+
+    worker.on("failed", (job, err) => {
+      console.error(`[Worker] Drop ${job?.data.dropId} failed:`, err.message);
+    });
+
+    worker.on("error", (err) => {
+      console.warn("[Worker] Redis error:", err.message);
+    });
+
+    console.log("[Worker] Drop dispatch worker started");
+    return worker;
+  } catch (err: any) {
+    console.warn("[Worker] Could not start (Redis unavailable):", err.message);
+    return null;
+  }
+}

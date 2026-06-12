@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Creator, Drop } from "../types";
 import { DEFAULT_CREATORS } from "../data";
+import { API_BASE } from "../api";
 import { Cpu, Send, Volume2, Mic, Play, Square, Sparkles, Check, ListRestart, ExternalLink } from "lucide-react";
 
 interface CreatorStudioProps {
@@ -123,7 +124,7 @@ export default function CreatorStudio({ onPublishDrop, activeFeed }: CreatorStud
     setIsGenerating(true);
     setErrorLog(null);
     try {
-      const response = await fetch("/api/drops/generate", {
+      const response = await fetch(`${API_BASE}/api/drops/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -204,7 +205,7 @@ export default function CreatorStudio({ onPublishDrop, activeFeed }: CreatorStud
     setIsSynthesizing(true);
     setErrorLog(null);
     try {
-      const response = await fetch("/api/drops/tts", {
+      const response = await fetch(`${API_BASE}/api/drops/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

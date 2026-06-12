@@ -1,44 +1,82 @@
 import express from "express";
+import "express-async-errors";
+import cors from "cors";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
+import authRoutes from "./server/routes/auth.js";
+import creatorsRoutes from "./server/routes/creators.js";
+import dropsRoutes from "./server/routes/drops.js";
+import consumerRoutes from "./server/routes/consumer.js";
+import analyticsRoutes from "./server/routes/analytics.js";
+import { initVapid } from "./server/push/index.js";
+import { initQueue } from "./server/queues/dispatcher.js";
+import { startDropWorker } from "./server/workers/dropWorker.js";
+import { ingestYouTubeVideo } from "./server/ingest/youtube.js";
+import { requireCreatorAuth } from "./server/middleware/auth.js";
+
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const API_ONLY = process.env.API_ONLY === "true";
 
+// ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json({ limit: "5mb" }));
+app.use(cors({
+  origin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  credentials: true,
+}));
 
-// Lazy initializer for Gemini client
+// ── Gemini helpers ────────────────────────────────────────────────────────────
 let aiClient: GoogleGenAI | null = null;
+
 function getGeminiClient(): GoogleGenAI {
   if (!aiClient) {
     const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY is not configured in secrets.");
-    }
+    if (!key) throw new Error("GEMINI_API_KEY is not configured.");
     aiClient = new GoogleGenAI({
       apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
     });
   }
   return aiClient;
 }
 
-// Local high-fidelity fallback generator matching creator voice personas
+async function callGeminiWithRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Promise<T> {
+  let lastError: any = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message ?? "";
+      const code = err?.status ?? err?.code ?? "";
+      const retriable =
+        msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand") ||
+        msg.includes("429") || code === 503 || code === 429 || code === "UNAVAILABLE";
+      if (retriable && i < retries - 1) {
+        const backoff = delayMs * Math.pow(2, i);
+        console.warn(`Gemini retry ${i + 1}/${retries} in ${backoff}ms: ${msg}`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
 function getFallbackDrop(rawInput: string, creatorName: string, contextType: string) {
-  const inputStr = rawInput || "";
-  const nameLower = (creatorName || "").toLowerCase();
+  const inputStr = rawInput ?? "";
+  const nameLower = (creatorName ?? "").toLowerCase();
 
   let title = "The Distribution Moat";
   let content = "We must urge major caution: relying on third-party streams leaves you vulnerable. You need high-impact direct delivery.";
-  let category = contextType || "Financial / Entrepreneurship";
+  let category = contextType ?? "Financial / Entrepreneurship";
   let tone = "Inspirational";
   let isAdult = false;
 
@@ -62,12 +100,12 @@ function getFallbackDrop(rawInput: string, creatorName: string, contextType: str
     content = `At Invest Fest, we analyze compound wealth drivers and tell you: redirect your active income into cash-flowing assets that sustain your lifestyle before you accumulate depreciating liabilities. If you ignore direct links and local lists, you're building on rented land. Let your assets pay for your luxury!`;
     category = "Financial Literacy / Invest Fest";
     tone = "Educational";
-  } else if (nameLower.includes("school") || nameLower.includes("knocks") || nameLower.includes("james")) {
+  } else if (nameLower.includes("school") || nameLower.includes("knocks") || nameLower.includes("james") || nameLower.includes("sohk")) {
     title = "Actions Over Routine Playbooks";
     content = `I met an 82-year-old self-made billionaire on Park Avenue and asked for his regrets. He said: 'James, tell them to stop spending all day reading about morning routines instead of picking up the phone and calling fifty clients.' Active rejection in the real arena is the ultimate filter. Wake up and build direct bridges!`;
     category = "Inspirational / Wisdom";
     tone = "Inspirational";
-  } else if (nameLower.includes("cosmic") || nameLower.includes("horoscope") || nameLower.includes("insights")) {
+  } else if (nameLower.includes("cosmic") || nameLower.includes("horoscope")) {
     title = "Mercury-Pluto Silent Convergence";
     content = `Mercury aligns with Pluto tonight, urging you to keep your next major career move close to your chest. Refine your narrative in absolute silent alignment, and ignore the noise of outside opinions. Relying on generic centralized feed algorithms is a spiritual hazard—cultivate local direct communication channels immediately.`;
     category = "Spiritual & Lifestyle";
@@ -85,82 +123,42 @@ function getFallbackDrop(rawInput: string, creatorName: string, contextType: str
     tone = "Seasonal";
   }
 
-  // Smart injection of the user's custom draft if they modified the default text area
   const defaultRaw = "I want to warn everyone that if you ignore direct messaging links or text notification lists, you will get destroyed. We are building our own direct membership tools. Tell them about assets over liabilities.";
   if (inputStr && inputStr.trim() !== defaultRaw.trim()) {
-    const formattedInput = inputStr.trim();
+    const fi = inputStr.trim();
     if (nameLower.includes("charlemagne")) {
-      content = `[Donkey Dialogue Channel] Bold take on your idea: "${formattedInput}" Stop sleeping on this! If you keep putting your business on rented channels, you are setting yourself up to receive the legendary Donkey of the Day! Own your media assets directly.`;
+      content = `[Donkey Dialogue Channel] Bold take on your idea: "${fi}" Stop sleeping on this! If you keep putting your business on rented channels, you are setting yourself up to receive the legendary Donkey of the Day! Own your media assets directly.`;
     } else if (nameLower.includes("gary") || nameLower.includes("vee")) {
-      content = `[Deterministic Vayner Take] Look, let's stop guessing with surveillance! Focus on: "${formattedInput}" This is exactly what commands 3x CPMs because it is 100% user-declared. Direct connection, zero tracking, total control is the primary business moat!`;
+      content = `[Deterministic Vayner Take] Look, let's stop guessing with surveillance! Focus on: "${fi}" This is exactly what commands 3x CPMs because it is 100% user-declared. Direct connection, zero tracking, total control is the primary business moat!`;
     } else if (nameLower.includes("beast")) {
-      content = `[Beast Financial Alert] We are testing this: "${formattedInput}" If you don't build immediate direct notification lines, you will get absolutely destroyed in the next era. Build direct sovereign assets, push your physical notifications, and win!`;
+      content = `[Beast Financial Alert] We are testing this: "${fi}" If you don't build immediate direct notification lines, you will get absolutely destroyed in the next era. Build direct sovereign assets, push your physical notifications, and win!`;
     } else if (nameLower.includes("naughty")) {
-      content = `[Naughty Santa Parody] Alright, raw holiday gossip: "${formattedInput}" Rudolph is crying, the reindeer are unionizing, and we are delivering pure unfiltered truth. Opt-in filters required!`;
+      content = `[Naughty Santa Parody] Alright, raw holiday gossip: "${fi}" Rudolph is crying, the reindeer are unionizing, and we are delivering pure unfiltered truth. Opt-in filters required!`;
       isAdult = true;
     } else {
-      content = `[Refined Creator Ingress] Polished take: "${formattedInput}". High-performance creators must prioritize sovereign, direct communication channels that bypass third-party algorithmic feed suppression. Build cash-flowing direct membership assets, not rented liabilities!`;
+      content = `[Refined Creator Ingress] Polished take: "${fi}". High-performance creators must prioritize sovereign, direct communication channels that bypass third-party algorithmic feed suppression. Build cash-flowing direct membership assets, not rented liabilities!`;
     }
   }
 
   return { title, content, category, tone, isAdult };
 }
 
-// Robust retry wrapper for Gemini SDK calls to handle transient 503 / 429 / high demand errors
-async function callGeminiWithRetry<T>(
-  fn: () => Promise<T>,
-  retries = 3,
-  delayMs = 1000
-): Promise<T> {
-  let lastError: any = null;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastError = err;
-      const errMsg = err?.message || "";
-      const errStatus = err?.status || err?.code || "";
-      const isRetriable = 
-        errMsg.includes("503") || 
-        errMsg.includes("UNAVAILABLE") || 
-        errMsg.includes("high demand") || 
-        errMsg.includes("429") || 
-        errStatus === 503 || 
-        errStatus === 429 || 
-        errStatus === "UNAVAILABLE";
-
-      if (isRetriable && i < retries - 1) {
-        const backoff = delayMs * Math.pow(2, i);
-        console.warn(`Gemini API 503/429 encountered (attempt ${i + 1}/${retries}). Retrying in ${backoff}ms... Error:`, errMsg);
-        await new Promise((resolve) => setTimeout(resolve, backoff));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastError;
-}
-
-// REST API endpoint: Check configuration
-app.get("/api/config", (req, res) => {
+// ── Original Gemini endpoints (preserved exactly) ────────────────────────────
+app.get("/api/config", (_req, res) => {
   res.json({
     hasApiKey: !!process.env.GEMINI_API_KEY,
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? null,
   });
 });
 
-// REST API endpoint: AI Drop Assistant
-// Refines transcripts, notes, or prompts into an elegant atomic Statement/Story
 app.post("/api/drops/generate", async (req, res) => {
   const { rawInput, creatorName, contextType } = req.body;
-  if (!rawInput) {
-    return res.status(400).json({ error: "No input text provided" });
-  }
+  if (!rawInput) return res.status(400).json({ error: "No input text provided" });
 
   try {
-    // Attempt Gemini Generation
     const ai = getGeminiClient();
-    const systemPrompt = `You are a world-class editor for "The MIC Drops" content platform. 
-Your task is to take a raw draft, quote, idea, or transcript from a creator and refine it into an exceptional atomic "Drop". 
+    const systemPrompt = `You are a world-class editor for "The MIC Drops" content platform.
+Your task is to take a raw draft, quote, idea, or transcript from a creator and refine it into an exceptional atomic "Drop".
 
 CRITICAL VOICE STYLE RULES:
 You MUST write the narrative entirely inside the distinct speech patterns, unique buzzwords, personality traits, and attitudes of the selected creator:
@@ -187,99 +185,97 @@ Return the response strictly inside a JSON object with this shape:
   "isAdult": false
 }`;
 
-    const promptText = `Creator Selected: ${creatorName || "Unknown Creator"} (Context: ${contextType || "General"})
+    const promptText = `Creator Selected: ${creatorName ?? "Unknown Creator"} (Context: ${contextType ?? "General"})
 Raw Draft / Note / Video description:
 "${rawInput}"
 
 Synthesize into an elegant MIC Drop in their exact voice style, first-person attitude, and specific category. Make sure it is deeply customized.`;
 
-    const response = await callGeminiWithRetry(() => 
+    const response = await callGeminiWithRetry(() =>
       ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents: promptText,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: "application/json",
-        },
+        config: { systemInstruction: systemPrompt, responseMimeType: "application/json" },
       })
     );
 
-    const parsedData = JSON.parse(response.text || "{}");
-    res.json({ success: true, drop: parsedData });
+    res.json({ success: true, drop: JSON.parse(response.text ?? "{}") });
   } catch (apiError: any) {
-    console.warn("Gemini API call failed or unavailable (e.g. 503 high demand/missing key). Activating local creator voice fallback generator. Error Detail:", apiError.message || apiError);
-    // Invoke Premium Local Creator-Styling Fallback Generator
-    const fallbackDrop = getFallbackDrop(rawInput, creatorName, contextType);
-    res.json({ success: true, drop: fallbackDrop, isFallback: true });
+    console.warn("Gemini unavailable, using fallback:", apiError.message);
+    res.json({ success: true, drop: getFallbackDrop(rawInput, creatorName, contextType), isFallback: true });
   }
 });
 
-// REST API endpoint: Real-Time TTS Speech Synthesis
-// Performs direct text-to-speech for client-side playback using the gemini-3.1-flash-tts-preview model
 app.post("/api/drops/tts", async (req, res) => {
+  const { text, voiceName } = req.body;
+  if (!text) return res.status(400).json({ error: "No text specified for synthesis." });
+
+  const selectedVoice = voiceName ?? "Zephyr";
   try {
-    const { text, voiceName } = req.body;
-    if (!text) {
-      return res.status(400).json({ error: "No text specified for synthesis." });
-    }
-
-    const selectedVoice = voiceName || "Zephyr"; // Puck, Charon, Kore, Fenrir, Zephyr
-    console.log(`Synthesizing text with voice ${selectedVoice}: "${text.substring(0, 30)}..."`);
-
     const ai = getGeminiClient();
-    const response = await callGeminiWithRetry(() => 
+    const response = await callGeminiWithRetry(() =>
       ai.models.generateContent({
         model: "gemini-3.1-flash-tts-preview",
-        contents: [{ parts: [{ text: text }] }],
+        contents: [{ parts: [{ text }] }],
         config: {
           responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: selectedVoice },
-            },
-          },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } },
         },
       })
     );
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) {
-      throw new Error("No audio payload returned from Google TTS model.");
-    }
+    if (!base64Audio) throw new Error("No audio payload returned from TTS model.");
 
-    res.json({
-      success: true,
-      audioBase64: base64Audio,
-      voiceSelected: selectedVoice,
-      sampleRate: 24000,
-    });
+    res.json({ success: true, audioBase64: base64Audio, voiceSelected: selectedVoice, sampleRate: 24000 });
   } catch (error: any) {
-    console.error("TTS Synthesis Error:", error);
-    res.status(500).json({
-      error: error.message || "Failed to synthesize speech. Ensure GEMINI_API_KEY is configured."
-    });
+    console.error("TTS error:", error);
+    res.status(500).json({ error: error.message ?? "Failed to synthesize speech." });
   }
 });
 
-// Vite Integration Middleware
+// ── YouTube ingest (creator auth required, AUTHORIZED status only) ────────────
+app.post("/api/ingest/youtube", requireCreatorAuth, async (req, res) => {
+  const { youtubeUrl, timeCode, windowSeconds } = req.body;
+  if (!youtubeUrl) return res.status(400).json({ error: "youtubeUrl required" });
+
+  const result = await ingestYouTubeVideo(youtubeUrl, req.creator!.creatorId, { timeCode, windowSeconds });
+  if ("error" in result) return res.status(400).json(result);
+  res.status(201).json({ success: true, ...result });
+});
+
+// ── Production routes ─────────────────────────────────────────────────────────
+app.use("/api/auth", authRoutes);
+app.use("/api/creators", creatorsRoutes);
+app.use("/api/drops", dropsRoutes);
+app.use("/api/consumer", consumerRoutes);
+app.use("/api/analytics", analyticsRoutes);
+
+// ── Global error handler (express-async-errors forwards async rejections here)
+app.use("/api", (err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[API Error]", err.message);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Internal server error" });
+});
+
+// ── Vite / static serving ─────────────────────────────────────────────────────
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+  if (!IS_PRODUCTION) {
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
-  } else {
+  } else if (!API_ONLY) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[THE MIC DROPS SERVER] Running on port http://localhost:${PORT}`);
+    console.log(`[THE MIC DROPS] Running on http://localhost:${PORT} (API_ONLY=${API_ONLY})`);
   });
 }
 
+// ── Initialize services ───────────────────────────────────────────────────────
+initVapid();
+initQueue();
+startDropWorker();
 startServer();

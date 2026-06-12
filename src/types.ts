@@ -1,3 +1,5 @@
+export type CreatorStatus = "PITCH" | "AUTHORIZED" | "REMOVED";
+
 export interface Creator {
   id: string;
   name: string;
@@ -8,6 +10,8 @@ export interface Creator {
   voiceName: "Zephyr" | "Fenrir" | "Kore" | "Puck" | "Charon";
   description: string;
   videoChannelContext?: string;
+  /** PITCH = demo content, AUTHORIZED = real creator, REMOVED = delisted */
+  status?: CreatorStatus;
 }
 
 export interface Drop {

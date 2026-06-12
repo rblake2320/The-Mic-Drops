@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Drop, Creator } from "../types";
 import { DEFAULT_CREATORS } from "../data";
+import { API_BASE } from "../api";
 import { 
   Wifi, Battery, Bell, Settings2, Sparkles, Check, 
   Volume2, Play, Square, ExternalLink, ArrowLeft, RefreshCw,
@@ -224,7 +225,7 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
   const handleMobileTTS = async (textToSpeak: string, voiceSelected: string) => {
     setIsSynthesizing(true);
     try {
-      const response = await fetch("/api/drops/tts", {
+      const response = await fetch(`${API_BASE}/api/drops/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: textToSpeak, voiceName: voiceSelected })

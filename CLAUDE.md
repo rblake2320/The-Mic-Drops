@@ -1,42 +1,101 @@
-# CLAUDE.md
+# CLAUDE.md — The MIC Drops
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-The MIC Drops ("Micro Ingestion Channels") — a consumer-controlled micro-content delivery platform demo, exported from Google AI Studio. Single Express server hosts both the React SPA and the Gemini-backed API.
+Micro Ingestion Channels: consumer-controlled micro-content delivery platform.
+React 19 SPA (Cloudflare Pages) + Express API (Hostinger VPS) + Prisma/Postgres + BullMQ + Web Push.
 
 ## Commands
 
 ```bash
-npm run dev      # dev server with Vite middleware (tsx server.ts) → http://localhost:3000
-npm run lint     # typecheck only (tsc --noEmit) — there is no eslint
-npm run build    # vite build (client) + esbuild bundle of server.ts → dist/
-npm start        # production: NODE_ENV=production node dist/server.cjs
+npm run docker:up          # start local Postgres (:5433) + Redis (:6381)
+npm run db:push            # apply schema to local DB (dev)
+npm run db:migrate         # prisma migrate deploy (production)
+npm run db:seed            # seed 8 creators + 18 drops (all PITCH status)
+npm run db:studio          # Prisma Studio UI
+npm run vapid:generate     # print VAPID keys for .env
+npm run dev                # Vite + Express dev server → http://localhost:3000
+npm run lint               # tsc --noEmit (no eslint)
+npm run build              # vite build + esbuild server bundle → dist/
+npm start                  # production: node dist/server.cjs
+npm run docker:down        # stop local DB + Redis
 ```
-
-There is no test suite. Verify changes with `npm run lint` and `npm run build`, then smoke-test `npm run dev` (GET /, GET /api/config, POST /api/drops/generate).
 
 ## Architecture
 
-- `server.ts` — single Express server (port 3000, hardcoded). Three endpoints: `GET /api/config`, `POST /api/drops/generate`, `POST /api/drops/tts`. In dev it mounts Vite in middleware mode; in production (`NODE_ENV=production`) it serves static `dist/`.
-- `src/App.tsx` — top-level tab shell (showcase / pitch). Owns the drops feed state; passes `onPublishDrop` down to CreatorStudio and the feed to MobileSimulator.
-- `src/components/` — three large self-contained panels: CreatorStudio (AI authoring + TTS playback), MobileSimulator (simulated consumer phone UI), InvestorSandbox (financial model with recharts).
-- `src/types.ts` — `Creator`, `Drop`, `FinancialInputs`, `FinancialMetric` shared interfaces.
-- `src/data.ts` — `DEFAULT_CREATORS` and `DEFAULT_DROPS` seed data (persona-based demo content).
-- Styling is Tailwind CSS v4 via the `@tailwindcss/vite` plugin — theme tokens live in `src/index.css` (`@theme` block), no tailwind.config file.
+```
+Cloudflare Pages ──VITE_API_URL──▶  Hostinger VPS :3000
+  dist/ (React SPA)                   Express API
+  public/sw.js (service worker)         Prisma → Postgres
+  src/api.ts (API_BASE)                 BullMQ → Redis
+                                        VAPID push
+```
+
+### Key files
+
+- `server.ts` — single Express entrypoint. Preserves all Gemini routes; mounts all production routes; calls `initVapid / initQueue / startDropWorker` at startup. `API_ONLY=true` skips static serving on VPS.
+- `server/db.ts` — Prisma singleton (global cache avoids connection exhaustion in dev)
+- `server/middleware/auth.ts` — `requireCreatorAuth` / `requireConsumerAuth` / `requireAdminAuth`
+- `server/routes/` — auth, creators, drops, consumer, analytics
+- `server/push/index.ts` — VAPID + web push dispatch
+- `server/queues/dispatcher.ts` — BullMQ (uses its own ioredis — do NOT install standalone ioredis)
+- `server/workers/dropWorker.ts` — BullMQ worker, marks SENT, calls push
+- `server/ingest/youtube.ts` — YouTube transcript → DRAFT drop (AUTHORIZED creators only)
+- `prisma/schema.prisma` — full schema: Creator, Drop, Consumer, CreatorUser, Subscription, AnalyticsEvent
+- `prisma/seed.ts` — imports from src/data.ts, upserts all creators as PITCH
+- `src/api.ts` — `API_BASE = VITE_API_URL ?? ""` (empty = same-origin in dev)
+- `public/sw.js` — service worker for Web Push notifications
+
+### Creator status lifecycle
+
+```
+PITCH → demo content via Gemini fallback
+AUTHORIZED → real content, YouTube ingest enabled, consent recorded
+REMOVED → PII anonymized, analytics preserved
+```
+
+Admin endpoints use `Authorization: Bearer <ADMIN_SECRET>` header.
+Promote James Dumoulin (seed id: `sohk`):
+```
+PATCH /api/creators/sohk/status
+{ "status": "AUTHORIZED", "youtubeChannelId": "UCxxx", "consentRecord": {...} }
+```
+
+## Environment variables
+
+See `.env.example` for full list. Key vars:
+- `DATABASE_URL` — Postgres connection string
+- `REDIS_URL` — Redis connection string (default `redis://localhost:6381` in dev)
+- `JWT_SECRET` — random 64+ char string
+- `ADMIN_SECRET` — admin bearer token
+- `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_EMAIL` — from `npm run vapid:generate`
+- `GEMINI_API_KEY` — optional; demo works without it via getFallbackDrop()
+- `CORS_ORIGIN` — set to Cloudflare Pages URL in production
+- `API_ONLY=true` — set on VPS so server skips static file serving
+- `VITE_API_URL` — set in Cloudflare Pages dashboard (the VPS API URL)
+
+## Deploy targets
+
+- **Frontend**: Cloudflare Pages — auto-deploys on push to `main` via `.github/workflows/deploy.yml`
+- **Backend**: Hostinger VPS — SSH deploy in same workflow: git pull → npm ci → prisma migrate → pm2 restart
+- **Nginx**: `nginx/mic-drops.conf` — proxies `/api/*` to `localhost:3000`, SSL via Let's Encrypt
 
 ## Key behaviors to preserve
 
-- **Gemini fallback**: `/api/drops/generate` must never 500 on a missing key or API outage — it falls back to `getFallbackDrop()` (local persona-styled generator) and returns `isFallback: true`. The demo is designed to work with no `GEMINI_API_KEY`.
-- **Retry wrapper**: all Gemini calls go through `callGeminiWithRetry()` (exponential backoff on 429/503).
-- Models used: `gemini-3.5-flash` (generation), `gemini-3.1-flash-tts-preview` (TTS, 24 kHz PCM base64).
-- `metadata.json` is the AI Studio app manifest (microphone permission, server-side Gemini capability) — keep it if re-importing to AI Studio.
+- **Gemini fallback**: `/api/drops/generate` never 500s — falls back to `getFallbackDrop()` when API key missing or quota hit. `isFallback: true` in response.
+- **BullMQ graceful**: queue and worker fail silently when Redis unavailable — existing demo continues.
+- **No standalone ioredis**: BullMQ bundles its own. Adding ioredis separately causes a TypeScript `AbstractConnector.connecting` protected class conflict.
+- **Local dev ports**: Postgres=5433, Redis=6381 (avoid conflicts with user's existing PG on 5432/5434, Redis on 6379/6380).
+- `prisma generate` must run before `tsc --noEmit`.
 
-## Environment
+## Phase 1 creator: James Dumoulin (SOHK)
 
-- `GEMINI_API_KEY` (optional) — enables live generation + TTS. Loaded via dotenv from `.env`. Never commit keys; `.gitignore` excludes `.env*` except `.env.example`.
+Site: words-of-wisdom.manus.space — already live, first real creator target.
+Vertical slice: James publishes one real Drop from one real SOHK episode → subscriber's phone.
+Steps after VPS deploy:
+1. `PATCH /api/creators/sohk/status` with `AUTHORIZED`
+2. `POST /api/ingest/youtube` with his YouTube episode URL
+3. Consumer subscribes via push + watches `sohk` creator
+4. Drop lands on phone
 
 ## History note
 
-This repo's initial commit was a scrambled AI Studio export where every file's content was saved under the wrong filename (e.g. the server lived in `vite.config.ts`, the lockfile in `server.ts`). The repair commit reorganized everything into the current layout — be skeptical of any old branches or forks predating it.
+Initial commit was a scrambled AI Studio export (files saved under wrong filenames — server lived in `vite.config.ts`, lockfile in `server.ts`). Repaired in second commit. Production backend added in subsequent session — see git log for full change set.

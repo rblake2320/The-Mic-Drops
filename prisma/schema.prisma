@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum VoiceName {
+  Zephyr
+  Fenrir
+  Kore
+  Puck
+  Charon
+}
+
+enum CreatorStatus {
+  PITCH
+  AUTHORIZED
+  REMOVED
+}
+
+enum AnchorSource {
+  YouTube
+  Netflix
+  Radio
+  Podcast
+  Website
+  Broadcast
+}
+
+enum DropStatus {
+  DRAFT
+  SCHEDULED
+  SENT
+  CANCELLED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+model Creator {
+  id                  String        @id @default(cuid())
+  name                String
+  handle              String        @unique
+  avatarUrl           String
+  category            String
+  followersCount      String
+  voiceName           VoiceName
+  description         String        @db.Text
+  videoChannelContext String?
+  status              CreatorStatus @default(PITCH)
+  youtubeChannelId    String?
+  consentSignedAt     DateTime?
+  consentRecord       Json?
+  pitchContactEmail   String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  drops         Drop[]
+  users         CreatorUser[]
+  subscriptions Subscription[]
+}
+
+model Drop {
+  id                String       @id @default(cuid())
+  creatorId         String
+  title             String
+  content           String       @db.Text
+  voiceName         String
+  category          String
+  dateSent          DateTime     @default(now())
+  tone              String
+  isAdult           Boolean      @default(false)
+  anchorTitle       String
+  anchorSource      AnchorSource
+  anchorLink        String
+  anchorTimeCode    String?
+  transcriptContext String?      @db.Text
+  status            DropStatus   @default(DRAFT)
+  scheduledAt       DateTime?
+  sentAt            DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  creator         Creator          @relation(fields: [creatorId], references: [id])
+  analyticsEvents AnalyticsEvent[]
+}
+
+model Consumer {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  interests    String[]
+  ageVerified  Boolean  @default(false)
+  pushEndpoint String?  @db.Text
+  pushAuth     String?
+  pushP256dh   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions   Subscription[]
+  analyticsEvents AnalyticsEvent[]
+}
+
+model CreatorUser {
+  id           String   @id @default(cuid())
+  creatorId    String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("creator")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  creator Creator @relation(fields: [creatorId], references: [id])
+}
+
+model Subscription {
+  id         String             @id @default(cuid())
+  consumerId String
+  creatorId  String
+  status     SubscriptionStatus @default(ACTIVE)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  consumer Consumer @relation(fields: [consumerId], references: [id])
+  creator  Creator  @relation(fields: [creatorId], references: [id])
+
+  @@unique([consumerId, creatorId])
+}
+
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  type       String
+  consumerId String?
+  creatorId  String?
+  dropId     String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  consumer Consumer? @relation(fields: [consumerId], references: [id])
+  drop     Drop?     @relation(fields: [dropId], references: [id])
+}
