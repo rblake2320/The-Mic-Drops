@@ -2115,10 +2115,9 @@ export default function InvestorSandbox() {
                             <td className="py-1 font-bold text-slate-300">
                               <div className="flex items-center gap-1">
                                 {isUnderThreshold && (
-                                  <AlertTriangle 
-                                    className="w-2.5 h-2.5 text-rose-500 shrink-0" 
-                                    title={`Below configured sustainable threshold of ${formatCurrency(sustainableThreshold)}`} 
-                                  />
+                                  <span title={`Below configured sustainable threshold of ${formatCurrency(sustainableThreshold)}`}>
+                                    <AlertTriangle className="w-2.5 h-2.5 text-rose-500 shrink-0" />
+                                  </span>
                                 )}
                                 {row.name.replace("Month ", "M")}
                               </div>
