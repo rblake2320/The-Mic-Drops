@@ -1,8 +1,6 @@
 name = "the-mic-drops"
 pages_build_output_dir = "dist"
 
-[build]
-command = "npm run build"
-
-# Set these in the Cloudflare Pages dashboard under Settings > Environment Variables > Build time
-# VITE_API_URL = "https://api.your-domain.com"
+# Build happens in GitHub Actions (npm run build with VITE_API_URL secret),
+# then `wrangler pages deploy dist` uploads the result.
+# VITE_API_URL is baked in at build time — current: https://srv1740069.hstgr.cloud

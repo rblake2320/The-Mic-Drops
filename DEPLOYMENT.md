@@ -5,22 +5,25 @@
 ```
 GitHub main branch
     │
-    ├─ Cloudflare Pages ── React SPA (dist/)
-    │   └─ VITE_API_URL=https://MIC_DROPS_DOMAIN/  (or srv1740069.hstgr.cloud temporarily)
+    ├─ Cloudflare Pages ── React SPA ── LIVE: https://the-mic-drops.pages.dev
+    │   └─ VITE_API_URL=https://srv1740069.hstgr.cloud (baked in at build)
     │
-    └─ Hostinger VPS (SHARED) ── 2.25.184.107
+    └─ Hostinger VPS (SHARED) ── 2.25.184.107 (srv1740069.hstgr.cloud)
         Ubuntu 22.04 / 2 vCPU / 8GB
         │
-        ├─ selfconnect.ai → PM2: selfconnect (SelfConnect project — separate)
-        └─ MIC_DROPS_DOMAIN → PM2: mic-drops (port 3000)
-               └─ Nginx virtual host → :3000
+        ├─ selfconnect.ai → SelfConnect project (separate — do not touch)
+        └─ srv1740069.hstgr.cloud → PM2: mic-drops (port 3000)
+               └─ Nginx vhost → :3000, SSL via Let's Encrypt on the srv hostname
                └─ Postgres: micdrop DB (local)
                └─ Redis: shared instance
 ```
 
-**Domain for MIC Drops API:** You need a domain or subdomain that isn't selfconnect.ai.
-Suggestions (all ~$14/yr): `micdrop.app`, `thedrops.app`, `mic-drops.app`
-Temporary option: `http://srv1740069.hstgr.cloud` (no SSL, for initial smoke-test only)
+**No domain purchase needed to launch:**
+- Frontend: `the-mic-drops.pages.dev` (free with Cloudflare Pages)
+- API: `srv1740069.hstgr.cloud` (Hostinger's VPS hostname — certbot can issue a cert for it
+  since it resolves to the VPS). Web Push requires HTTPS end-to-end, so run certbot before testing push.
+- Later: register a custom domain (e.g. `micdrop.app` ~$14/yr), add it to Cloudflare,
+  point an `api.` subdomain at 2.25.184.107, rebuild frontend with the new VITE_API_URL.
 
 ## VPS First-Time Setup
 
