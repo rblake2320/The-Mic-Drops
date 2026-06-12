@@ -373,7 +373,7 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
   const activeAd = getSponsorAdCard();
 
   return (
-    <div id="mobile-viewport-wrapper" className="flex items-center justify-center h-full p-4 select-none relative">
+    <div id="mobile-viewport-wrapper" className="flex items-center justify-center h-full w-full p-0 sm:p-4 select-none relative">
       {/* Dynamic Incoming Notification Overlay */}
       {notification && (
         <div 
@@ -382,7 +382,7 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
             setNavState("player");
             setNotification(null);
           }}
-          className="absolute top-8 left-1/2 -translate-x-1/2 w-[340px] bg-[#0A0A0A]/95 border border-[#C19A6B] p-3 rounded-none shadow-2xl flex items-start gap-2.5 cursor-pointer z-50 animate-bounce duration-300 backdrop-blur-md"
+          className="absolute top-8 left-1/2 -translate-x-1/2 w-[92%] max-w-[340px] bg-[#0A0A0A]/95 border border-[#C19A6B] p-3 rounded-none shadow-2xl flex items-start gap-2.5 cursor-pointer z-50 animate-bounce duration-300 backdrop-blur-md"
         >
           <img 
             src={DEFAULT_CREATORS.find(c => c.id === notification.creatorId)?.avatarUrl} 
@@ -401,9 +401,9 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
       )}
 
       {/* Realistic Titanium Phone Chassis */}
-      <div id="phone-frame" className="w-[370px] h-[720px] bg-[#0A0A0A] rounded-[48px] border-[10px] border-white/10 p-3 shadow-2xl flex flex-col relative overflow-hidden">
-        {/* Dynamic Island / Camera Notch */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 w-28 h-5 bg-black rounded-full z-45 flex items-center justify-center gap-1">
+      <div id="phone-frame" className="w-full h-[720px] sm:w-auto sm:h-[min(720px,calc(100dvh-140px))] sm:aspect-[370/720] bg-[#0A0A0A] rounded-none sm:rounded-[48px] border-0 sm:border-[10px] border-white/10 p-0 sm:p-3 shadow-2xl flex flex-col relative overflow-hidden">
+        {/* Dynamic Island / Camera Notch — only in framed (web) presentation */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 w-28 h-5 bg-black rounded-full z-45 hidden sm:flex items-center justify-center gap-1">
           <div className="w-2.5 h-2.5 rounded-full bg-[#1A1A1A]"></div>
           {playingAudio && (
             <div className="flex gap-0.5 items-center justify-center h-3">
@@ -415,7 +415,7 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
         </div>
 
         {/* Status Bar */}
-        <div className="flex justify-between items-center px-6 pt-2 pb-3 text-[10px] text-slate-300 font-bold font-mono">
+        <div className="hidden sm:flex justify-between items-center px-6 pt-2 pb-3 text-[10px] text-slate-300 font-bold font-mono">
           <span>{new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
           <div className="flex items-center gap-1.5">
             <Wifi className="w-3.5 h-3.5 text-slate-500" />
@@ -425,7 +425,7 @@ export default function MobileSimulator({ activeFeed, onAddNewDrop, lastPublishe
         </div>
 
         {/* Content Portal Viewports */}
-        <div className="flex-1 flex flex-col bg-[#0F0F0F] rounded-[38px] overflow-hidden border border-white/5 p-4 pt-2 relative">
+        <div className="flex-1 flex flex-col bg-[#0F0F0F] rounded-none sm:rounded-[38px] overflow-hidden border-0 sm:border border-white/5 p-4 pt-2 sm:pt-2 relative">
           
           {/* VIEW: preferences subscription parameters */}
           {navState === "preferences" && (
