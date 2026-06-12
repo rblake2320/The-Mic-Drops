@@ -1,0 +1,2626 @@
+import { useState, useMemo, MouseEvent } from "react";
+import { FinancialInputs } from "../types";
+import { TrendingUp, DollarSign, Users, Award, ShieldCheck, Activity, Target, Coins, Percent, ArrowUpRight, AlertTriangle, Plus, Trash2, Columns, X, Save, Copy, Calculator, Timer, Sparkles, Scale } from "lucide-react";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
+  Legend
+} from "recharts";
+
+export function getPnLAndKPIs(inputs: FinancialInputs) {
+  const { mau, conversionRate, cpmRate } = inputs;
+
+  const paidUsers = mau * (conversionRate / 100);
+  const freeUsers = mau - paidUsers;
+
+  // Monthly revenues
+  const subscriptionRev = paidUsers * 9.99; // $9.99 monthly sub tier
+  // 12 direct highly intentional drops with opt-in declared ads per free user per month
+  const monthlyAdRev = freeUsers * (cpmRate / 100) * 12; // Wait, CPM in previous file is (cpmRate / 1000) * 12 or (cpmRate / 1000) * 12? Let's check original file.
+  // Ah: let monthlyAdRev = freeUsers * (cpmRate / 1000) * 12; in original line 153. Let's make sure it is exactly (cpmRate / 1000) * 12.
+  // Wait, let's verify CPM division in our code. Yes, in line 153:
+  // const monthlyAdRev = freeUsers * (cpmRate / 1000) * 12;
+  // Let's copy it perfectly.
+  const totalRevenueSub = subscriptionRev + (freeUsers * (cpmRate / 1000) * 12) + (mau * 0.02);
+
+  // Premium seasonal channels (Santa, Easter Bunny, plus B2B Enterprise syndications like News and Business)
+  let enterpriseSaaSRev = 0;
+  if (mau >= 3000000) {
+    enterpriseSaaSRev = 550000; // Multi-brand accounts
+  } else if (mau >= 300000) {
+    enterpriseSaaSRev = 40000;
+  }
+
+  const totalRevenue = subscriptionRev + (freeUsers * (cpmRate / 1000) * 12) + (mau * 0.02) + enterpriseSaaSRev;
+
+  // Operating expenses (SaaS unit economics)
+  const pushNotificationCost = mau * 0.012; 
+  const cdnAudioCost = 1500 + (mau * 0.07);
+  const cloudInfrastructureCost = 3500 + (mau * 0.022);
+  const aiVoiceTtsCost = 250 + (mau * 0.0015);
+
+  let engineeringSlariesCost = 28000;
+  let productDesignCost = 5000;
+  let marketingCacCost = 10000;
+  let legalComplianceCost = 2500;
+  let miscellaneousCost = 2000;
+
+  if (mau > 1500000) {
+    engineeringSlariesCost = 450000;
+    productDesignCost = 75000;
+    marketingCacCost = 350000;
+    legalComplianceCost = 25000;
+    miscellaneousCost = 35000;
+  } else if (mau > 150000) {
+    engineeringSlariesCost = 110000;
+    productDesignCost = 18000;
+    marketingCacCost = 75000;
+    legalComplianceCost = 8000;
+    miscellaneousCost = 6500;
+  }
+
+  const stripeFees = (totalRevenue * 0.029) + (paidUsers * 0.30);
+
+  const totalCosts = 
+    pushNotificationCost + 
+    cdnAudioCost + 
+    cloudInfrastructureCost + 
+    aiVoiceTtsCost + 
+    engineeringSlariesCost + 
+    productDesignCost + 
+    marketingCacCost + 
+    legalComplianceCost + 
+    miscellaneousCost + 
+    stripeFees;
+
+  const netIncome = totalRevenue - totalCosts;
+  const margin = totalRevenue > 0 ? (netIncome / totalRevenue) * 100 : 0;
+  const arr = totalRevenue * 12;
+
+  // Approximate break-even calculations
+  const approxFixedCost = totalCosts - stripeFees - (mau * 0.02);
+  const revPerUser = totalRevenue / mau;
+  const breakEvenMAU = revPerUser > 0 ? approxFixedCost / revPerUser : 0;
+
+  // Churn probability
+  const baseChurn = 0.040;
+  const conversionPenalty = Math.max(0, conversionRate - 5) * 0.0035;
+  const premiumCpmBonus = Math.max(0, cpmRate - 5) * 0.0015;
+  const churnRateVal = Math.max(0.02, Math.min(baseChurn + conversionPenalty - premiumCpmBonus, 0.12));
+  const clvVal = 9.99 / churnRateVal;
+
+  return {
+    paidUsers,
+    freeUsers,
+    subscriptionRev,
+    monthlyAdRev: freeUsers * (cpmRate / 1000) * 12,
+    creatorAddOnRev: mau * 0.02,
+    enterpriseSaaSRev,
+    totalRevenue,
+    totalCosts,
+    netIncome,
+    margin,
+    arr,
+    breakEvenMAU,
+    churnProbability: churnRateVal * 100,
+    estimatedCLV: clvVal
+  };
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: any[];
+  label?: string;
+}
+
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+  if (active && payload && payload.length) {
+    const raw = payload[0].payload;
+    const isRevenueChart = payload.some(item => 
+      ["subRev", "adRev", "saasRev"].includes(item.dataKey)
+    );
+    const isProjVsActualChart = payload.some(item =>
+      ["totalRevenue", "actualRevenue"].includes(item.dataKey)
+    );
+
+    return (
+      <div className="bg-[#080808] border border-white/10 p-3 shadow-2xl font-mono text-[10px] rounded-none min-w-[210px] backdrop-blur-md">
+        {/* Month Title */}
+        <p className="text-slate-450 mb-2 border-b border-white/10 pb-1 uppercase tracking-widest text-[9px] font-bold">
+          {label}
+        </p>
+        
+        {/* Metric Series rows */}
+        <div className="space-y-1.5">
+          {payload.map((item: any, idx: number) => {
+            let displayValue = "";
+            if (item.dataKey === "mauK") {
+              displayValue = `${raw.mau.toLocaleString()} active users`;
+            } else if (item.dataKey === "subscribersK") {
+              displayValue = `${raw.subscribers.toLocaleString()} subscribers`;
+            } else if (item.dataKey === "consMauK") {
+              displayValue = `${raw.consMau.toLocaleString()} active users (Cons.)`;
+            } else if (item.dataKey === "consSubscribersK") {
+              displayValue = `${raw.consSubscribers.toLocaleString()} subscribers (Cons.)`;
+            } else if (["subRev", "adRev", "saasRev", "totalRevenue", "actualRevenue"].includes(item.dataKey)) {
+              displayValue = `$${Math.round(item.value).toLocaleString()}`;
+            } else if (item.dataKey === "consTotalRevenue") {
+              displayValue = `$${Math.round(item.value).toLocaleString()}`;
+            } else {
+              displayValue = item.value.toLocaleString();
+            }
+
+            return (
+              <div key={idx} className="flex justify-between items-center gap-4">
+                <span className="text-slate-500 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 block" style={{ backgroundColor: item.color }} />
+                  {item.name}:
+                </span>
+                <span className="text-white font-bold font-mono">
+                  {displayValue}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Dynamic Total Sum row for Multi-Series Revenue chart */}
+        {isRevenueChart && raw.totalRevenue && (
+          <div className="mt-2.5 pt-1.5 border-t border-[#C19A6B]/20 flex flex-col gap-1">
+            <div className="flex justify-between items-center font-bold">
+              <span className="text-[#C19A6B] uppercase tracking-wide text-[9px]">Aggressive Total</span>
+              <span className="text-white text-[11px] font-mono">${Math.round(raw.totalRevenue).toLocaleString()}</span>
+            </div>
+            {raw.consTotalRevenue !== undefined && (
+              <div className="flex justify-between items-center font-bold border-t border-white/5 pt-1">
+                <span className="text-[#F43F5E] uppercase tracking-wide text-[9px]">Conservative Total</span>
+                <span className="text-slate-300 text-[10px] font-mono">${Math.round(raw.consTotalRevenue).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Dynamic Variance for Proj vs Actual chart */}
+        {isProjVsActualChart && raw.actualRevenue !== undefined && raw.totalRevenue !== undefined && (
+          <div className="mt-2.5 pt-1.5 border-t border-white/10 flex flex-col gap-1">
+            <div className="flex justify-between items-center font-bold">
+              <span className="text-[#C19A6B] uppercase tracking-wide text-[9px]">Execution Variance</span>
+              {(() => {
+                const diff = raw.actualRevenue - raw.totalRevenue;
+                const pct = (diff / raw.totalRevenue) * 100;
+                const color = diff >= 0 ? "text-emerald-400" : "text-rose-450";
+                const sign = diff >= 0 ? "+" : "";
+                return (
+                  <span className={`text-[10px] font-mono ${color}`}>
+                    {sign}${diff.toLocaleString()} ({sign}{pct.toFixed(1)}%)
+                  </span>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+};
+
+export default function InvestorSandbox() {
+  // Financial sliders initialization
+  const [inputs, setInputs] = useState<FinancialInputs>({
+    mau: 500000,          // Default 500,000 MAU (Phase 2 Mid-Growth)
+    conversionRate: 8.0,  // 8.0% Premium Conversion Rate
+    cpmRate: 9.00,        // $9.00 User-Declared Targeting CPM (highly premium due to deterministic values)
+    creatorTakeRate: 15.0 // 15% Platform cut from creator-specific content
+  });
+
+  const [activeBenchmark, setActiveBenchmark] = useState<"seed" | "mid" | "high" | "custom">("mid");
+  const [subTab, setSubTab] = useState<"pnl" | "analytics" | "breakeven">("pnl");
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState<number>(11); // Month 12 default
+  const [overlayConservative, setOverlayConservative] = useState<boolean>(true); // Conservative model overlay comparator
+  const [actualsModifier, setActualsModifier] = useState<number>(92); // default 92% (historical actuals modifier)
+
+  // Growth Preset Scenario States
+  const [growthScenario, setGrowthScenario] = useState<"conservative" | "moderate" | "aggressive" | "custom">("moderate");
+  const [showDetailedRevenueTable, setShowDetailedRevenueTable] = useState<boolean>(false);
+  const [sustainableThreshold, setSustainableThreshold] = useState<number>(120000); // Default sustainable monthly revenue threshold $120k
+
+  // Secondary Break-Even Slider States
+  const [beStartingRevenue, setBeStartingRevenue] = useState<number>(65000); // Startup starting monthly revenue (synced to moderate)
+  const [beGrowthRate, setBeGrowthRate] = useState<number>(8.5); // Monthly revenue compound growth rate
+  const [beOpex, setBeOpex] = useState<number>(85000); // Startup monthly OpEx (fixed baseline)
+  const [beOpexGrowthRate, setBeOpexGrowthRate] = useState<number>(2.0); // Monthly OpEx increase pace (to represent scaling costs)
+
+  const applyGrowthScenario = (scenario: "conservative" | "moderate" | "aggressive") => {
+    setGrowthScenario(scenario);
+    setActiveBenchmark("custom");
+    if (scenario === "conservative") {
+      setInputs(prev => ({
+        ...prev,
+        mau: 150000,
+        conversionRate: 4.5,
+        cpmRate: 6.00
+      }));
+      setBeStartingRevenue(25000);
+      setBeGrowthRate(4.5);
+    } else if (scenario === "moderate") {
+      setInputs(prev => ({
+        ...prev,
+        mau: 750000,
+        conversionRate: 8.0,
+        cpmRate: 9.50
+      }));
+      setBeStartingRevenue(65000);
+      setBeGrowthRate(8.5);
+    } else if (scenario === "aggressive") {
+      setInputs(prev => ({
+        ...prev,
+        mau: 3500000,
+        conversionRate: 11.5,
+        cpmRate: 14.00
+      }));
+      setBeStartingRevenue(180000);
+      setBeGrowthRate(15.0);
+    }
+  };
+
+  // Saved scenarios state for the side-by-side comparison modal
+  const [savedScenarios, setSavedScenarios] = useState<Array<{ id: string; name: string; inputs: FinancialInputs }>>([
+    {
+      id: "preset-seed",
+      name: "Phase 1: Seed Baseline",
+      inputs: { mau: 50000, conversionRate: 5.0, cpmRate: 5.50, creatorTakeRate: 15.0 }
+    },
+    {
+      id: "preset-mid",
+      name: "Phase 2: Mid-Growth Match",
+      inputs: { mau: 500000, conversionRate: 8.0, cpmRate: 9.00, creatorTakeRate: 15.0 }
+    },
+    {
+      id: "preset-scale",
+      name: "Phase 3: Scale Objective",
+      inputs: { mau: 5000000, conversionRate: 12.0, cpmRate: 13.50, creatorTakeRate: 15.0 }
+    },
+    {
+      id: "preset-organic",
+      name: "High-Engagement Organic",
+      inputs: { mau: 350000, conversionRate: 10.5, cpmRate: 4.50, creatorTakeRate: 15.0 }
+    },
+    {
+      id: "preset-adheavy",
+      name: "Aggressive Ad-Focus Scale",
+      inputs: { mau: 2000000, conversionRate: 2.5, cpmRate: 14.00, creatorTakeRate: 15.0 }
+    }
+  ]);
+
+  const [newScenarioName, setNewScenarioName] = useState<string>("");
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState<boolean>(false);
+  const [scenarioAId, setScenarioAId] = useState<string>("preset-seed");
+  const [scenarioBId, setScenarioBId] = useState<string>("preset-mid");
+
+  const handleSaveScenario = () => {
+    const trimmed = newScenarioName.trim();
+    if (!trimmed) return;
+    const newId = `custom-${Date.now()}`;
+    setSavedScenarios(prev => [
+      ...prev,
+      {
+        id: newId,
+        name: trimmed,
+        inputs: { ...inputs }
+      }
+    ]);
+    setNewScenarioName("");
+    setScenarioBId(newId);
+  };
+
+  const handleDeleteScenario = (id: string, e: MouseEvent) => {
+    e.stopPropagation();
+    if (id.startsWith("preset-")) return;
+    setSavedScenarios(prev => prev.filter(s => s.id !== id));
+    if (scenarioAId === id) setScenarioAId("preset-seed");
+    if (scenarioBId === id) setScenarioBId("preset-mid");
+  };
+
+  const handleLoadScenario = (scenarioInputs: FinancialInputs) => {
+    setInputs({ ...scenarioInputs });
+    setActiveBenchmark("custom");
+    setGrowthScenario("custom");
+  };
+
+  const applyBenchmark = (type: "seed" | "mid" | "high") => {
+    setActiveBenchmark(type);
+    setGrowthScenario("custom");
+    if (type === "seed") {
+      setInputs({
+        mau: 50000,
+        conversionRate: 5.0,
+        cpmRate: 5.50,
+        creatorTakeRate: 15.0
+      });
+    } else if (type === "mid") {
+      setInputs({
+        mau: 500000,
+        conversionRate: 8.0,
+        cpmRate: 9.00,
+        creatorTakeRate: 15.0
+      });
+    } else if (type === "high") {
+      setInputs({
+        mau: 5000000,
+        conversionRate: 12.0,
+        cpmRate: 13.50,
+        creatorTakeRate: 15.0
+      });
+    }
+  };
+
+  const handleSliderChange = (key: keyof FinancialInputs, val: number) => {
+    setActiveBenchmark("custom");
+    setGrowthScenario("custom");
+    setInputs(prev => ({
+      ...prev,
+      [key]: val
+    }));
+  };
+
+  // Live dynamic calculations
+  const pnl = useMemo(() => {
+    const { mau, conversionRate, cpmRate, creatorTakeRate } = inputs;
+
+    const paidUsers = mau * (conversionRate / 100);
+    const freeUsers = mau - paidUsers;
+
+    // Monthly revenues
+    const subscriptionRev = paidUsers * 9.99; // $9.99 monthly sub tier
+    // 12 direct highly intentional drops with opt-in declared ads per free user per month
+    const monthlyAdRev = freeUsers * (cpmRate / 1000) * 12; 
+    const creatorAddOnRev = mau * 0.02; // SaaS monetization features: custom voice cloning, CRM hooks
+
+    // Premium seasonal channels (Santa, Easter Bunny, plus B2B Enterprise syndications like News and Business)
+    let enterpriseSaaSRev = 0;
+    if (mau >= 3000000) {
+      enterpriseSaaSRev = 550000; // Multi-brand accounts
+    } else if (mau >= 300000) {
+      enterpriseSaaSRev = 40000;
+    } else {
+      enterpriseSaaSRev = 0; // Pre-loaded default seasonal accounts only
+    }
+
+    const totalRevenue = subscriptionRev + monthlyAdRev + creatorAddOnRev + enterpriseSaaSRev;
+
+    // Operating expenses (SaaS unit economics)
+    const pushNotificationCost = mau * 0.012; // Onesignal/MobiLoud standard at scale
+    
+    // Bandwidth CDN delivery: heavy audio drops
+    const cdnAudioCost = 1500 + (mau * 0.07);
+
+    // Baseline database index, servers, caching nodes
+    const infraBase = 3500;
+    const infraVariable = mau * 0.022;
+    const cloudInfrastructureCost = infraBase + infraVariable;
+
+    // ElevenLabs enterprise custom models tier (cached common files, so we only generate dynamically per creator drop creation)
+    const aiVoiceTtsCost = 250 + (mau * 0.0015);
+
+    // Internal team salaries based on user-base step functions
+    let engineeringSlariesCost = 28000;
+    let productDesignCost = 5000;
+    let marketingCacCost = 10000;
+    let legalComplianceCost = 2500;
+    let miscellaneousCost = 2000;
+
+    if (mau > 1500000) {
+      // High growth hiring tier: 45 engineers
+      engineeringSlariesCost = 450000;
+      productDesignCost = 75000;
+      marketingCacCost = 350000;
+      legalComplianceCost = 25000;
+      miscellaneousCost = 35000;
+    } else if (mau > 150000) {
+      // Mid growth hiring tier: 10-12 engineers
+      engineeringSlariesCost = 110000;
+      productDesignCost = 18000;
+      marketingCacCost = 75000;
+      legalComplianceCost = 8000;
+      miscellaneousCost = 6500;
+    }
+
+    // Stripe merchant gateway processing fees
+    const stripeFees = (totalRevenue * 0.029) + (paidUsers * 0.30);
+
+    const totalCosts = 
+      pushNotificationCost + 
+      cdnAudioCost + 
+      cloudInfrastructureCost + 
+      aiVoiceTtsCost + 
+      engineeringSlariesCost + 
+      productDesignCost + 
+      marketingCacCost + 
+      legalComplianceCost + 
+      miscellaneousCost + 
+      stripeFees;
+
+    const netIncome = totalRevenue - totalCosts;
+    const margin = totalRevenue > 0 ? (netIncome / totalRevenue) * 100 : 0;
+    const arr = totalRevenue * 12;
+
+    // Approximate break-even calculations
+    const approxFixedCost = totalCosts - stripeFees - (mau * 0.02);
+    const revPerUser = totalRevenue / mau;
+    const breakEvenMAU = revPerUser > 0 ? approxFixedCost / revPerUser : 0;
+
+    return {
+      paidUsers,
+      freeUsers,
+      subscriptionRev,
+      monthlyAdRev,
+      creatorAddOnRev,
+      enterpriseSaaSRev,
+      totalRevenue,
+      pushNotificationCost,
+      cdnAudioCost,
+      cloudInfrastructureCost,
+      aiVoiceTtsCost,
+      engineeringSlariesCost,
+      productDesignCost,
+      marketingCacCost,
+      legalComplianceCost,
+      miscellaneousCost,
+      stripeFees,
+      totalCosts,
+      netIncome,
+      margin,
+      arr,
+      breakEvenMAU
+    };
+  }, [inputs]);
+
+  // Generate vector path coordinates for a clean preview line graph
+  const chartCoordinates = useMemo(() => {
+    // We compute 5 points across the scale from 50k to 6M MAU to plot the growth curves
+    const points = [50000, 200000, 500000, 1500000, 3000000, 5000000];
+    const { conversionRate, cpmRate } = inputs;
+
+    return points.map(m => {
+      const pUsers = m * (conversionRate / 100);
+      const fUsers = m - pUsers;
+      const subRev = pUsers * 9.99;
+      const adRev = fUsers * (cpmRate / 1000) * 12;
+      const addon = m * 0.02;
+      
+      let entRev = 0;
+      if (m >= 3000000) entRev = 550000;
+      else if (m >= 300000) entRev = 40000;
+
+      const totalRev = subRev + adRev + addon + entRev;
+
+      const pushCost = m * 0.012;
+      const cdnCost = 1500 + (m * 0.07);
+      const cloudCost = 3500 + m * 0.022;
+      const ttsCost = 250 + (m * 0.0015);
+
+      let engCost = 28000;
+      let pdCost = 5000;
+      let mktCost = 10000;
+      let legCost = 2500;
+      let miscCost = 2000;
+
+      if (m > 1500000) {
+        engCost = 450000;
+        pdCost = 75000;
+        mktCost = 350000;
+        legCost = 25000;
+        miscCost = 35000;
+      } else if (m > 150000) {
+        engCost = 110000;
+        pdCost = 18000;
+        mktCost = 75000;
+        legCost = 8000;
+        miscCost = 6500;
+      }
+
+      const strFees = (totalRev * 0.029) + (pUsers * 0.30);
+      const totalCost = pushCost + cdnCost + cloudCost + ttsCost + engCost + pdCost + mktCost + legCost + miscCost + strFees;
+
+      return {
+        mau: m,
+        revenue: totalRev,
+        cost: totalCost
+      };
+    });
+  }, [inputs.conversionRate, inputs.cpmRate]);
+
+  // 12-Month Projected Growth Dataset
+  const monthlyProjectionData = useMemo(() => {
+    const { mau, conversionRate, cpmRate } = inputs;
+    const months = [
+      "Month 1", "Month 2", "Month 3", "Month 4", "Month 5", "Month 6",
+      "Month 7", "Month 8", "Month 9", "Month 10", "Month 11", "Month 12"
+    ];
+
+    // Steady MoM compounding growth rate for the baseline (Aggressive: 6.5%)
+    const MoMGrowthRate = 0.065;
+    // Muted MoM compounding growth rate for conservative modeling
+    const ConsMoMGrowthRate = 0.030;
+
+    return months.map((month, index) => {
+      // Aggressive model
+      const monthMAU = Math.round(mau * Math.pow(1 + MoMGrowthRate, index));
+      const subscribers = Math.round(monthMAU * (conversionRate / 100));
+      const freeUsers = monthMAU - subscribers;
+
+      // Revenue breakdown matching PnL formulas
+      const subRev = subscribers * 9.99;
+      const adRev = freeUsers * (cpmRate / 1000) * 12;
+      const creatorAddOnRev = monthMAU * 0.02;
+
+      let entRev = 0;
+      if (monthMAU >= 3000000) {
+        entRev = 550000;
+      } else if (monthMAU >= 300000) {
+        entRev = 40000;
+      }
+
+      const totalRevenue = subRev + adRev + creatorAddOnRev + entRev;
+
+      // Conservative growth and metrics discount model
+      const consConversionRate = conversionRate * 0.7; // 30% reduction in premium upgrade yield
+      const consCpmRate = cpmRate * 0.8; // 20% lower CPM due to softer demand
+
+      const consMonthMAU = Math.round(mau * Math.pow(1 + ConsMoMGrowthRate, index));
+      const consSubscribers = Math.round(consMonthMAU * (consConversionRate / 100));
+      const consFreeUsers = consMonthMAU - consSubscribers;
+
+      const consSubRev = consSubscribers * 9.99;
+      const consAdRev = consFreeUsers * (consCpmRate / 1000) * 12;
+      const consCreatorAddOnRev = consMonthMAU * 0.015; // light engagement
+
+      let consEntRev = 0;
+      if (consMonthMAU >= 3000000) {
+        consEntRev = 400000;
+      } else if (consMonthMAU >= 300000) {
+        consEntRev = 30000;
+      }
+
+      const consTotalRevenue = consSubRev + consAdRev + consCreatorAddOnRev + consEntRev;
+
+      // Realistically simulated actual revenue incorporating deterministic monthly market fluctuations
+      const pseudoRandomNoise = [
+        0.91, // Month 1 (-9%)
+        0.97, // Month 2 (-3%)
+        1.04, // Month 3 (+4%)
+        0.88, // Month 4 (-12%)
+        1.02, // Month 5 (+2%)
+        1.09, // Month 6 (+9%)
+        0.95, // Month 7 (-5%)
+        0.92, // Month 8 (-8%)
+        1.01, // Month 9 (+1%)
+        0.96, // Month 10 (-4%)
+        1.11, // Month 11 (+11%)
+        1.05  // Month 12 (+5%)
+      ];
+      const actualRevenue = Math.round(totalRevenue * pseudoRandomNoise[index] * (actualsModifier / 100));
+
+      return {
+        name: month,
+        mau: monthMAU,
+        subscribers: subscribers,
+        subscribersK: parseFloat((subscribers / 1000).toFixed(1)),
+        mauK: parseFloat((monthMAU / 1000).toFixed(1)),
+        subRev: Math.round(subRev),
+        adRev: Math.round(adRev),
+        saasRev: Math.round(creatorAddOnRev + entRev),
+        totalRevenue: Math.round(totalRevenue),
+        actualRevenue,
+
+        // Conservative trajectory exports
+        consMau: consMonthMAU,
+        consSubscribers: consSubscribers,
+        consSubscribersK: parseFloat((consSubscribers / 1000).toFixed(1)),
+        consMauK: parseFloat((consMonthMAU / 1000).toFixed(1)),
+        consSubRev: Math.round(consSubRev),
+        consAdRev: Math.round(consAdRev),
+        consSaasRev: Math.round(consCreatorAddOnRev + consEntRev),
+        consTotalRevenue: Math.round(consTotalRevenue)
+      };
+    });
+  }, [inputs, actualsModifier]);
+
+  // Segmented drill-down metrics for the selected month index
+  const drilldownData = useMemo(() => {
+    const data = monthlyProjectionData[selectedMonthIndex];
+    if (!data) return [];
+    return [
+      { name: "Core Subscriptions", value: data.subRev, color: "#C19A6B", desc: "Premium tier memberships ($9.99/mo)" },
+      { name: "Topic CPM Ads", value: data.adRev, color: "#8A9A86", desc: "Intentional zero-surveillance targeting" },
+      { name: "Platform Creators & SaaS", value: data.saasRev, color: "#6E5A44", desc: "Enterprise licensing & voice features SaaS" }
+    ];
+  }, [monthlyProjectionData, selectedMonthIndex]);
+
+  // Dynamic Investor Summary Metrics
+  const summaryMetrics = useMemo(() => {
+    // 1. Churn Probability (Monthly Churn Rate %):
+    // Baseline churn is 4.0%.
+    // Churn increases by 0.35% for every 1.0% conversion rate above 5% (representing churn among marginal premium signups).
+    // Premium CPM rates represent high brand value and focus, reducing churn slightly by 0.15% per dollar above $5.00.
+    const baseChurn = 0.040;
+    const conversionPenalty = Math.max(0, inputs.conversionRate - 5) * 0.0035;
+    const premiumCpmBonus = Math.max(0, inputs.cpmRate - 5) * 0.0015;
+    
+    // Bounds churn rate between 2.0% and 12.0%
+    const churnRateVal = Math.max(0.02, Math.min(baseChurn + conversionPenalty - premiumCpmBonus, 0.12));
+    
+    // 2. Estimated CLV (Customer Lifetime Value):
+    // CLV = Average Revenue Per Member ($9.99/mo) / Monthly Churn Rate.
+    const clvVal = 9.99 / churnRateVal;
+
+    // 3. Total Projected ARR (Annualized Run-Rate):
+    // Based on the current slider inputs.
+    const activeARR = pnl.arr;
+    const month12ARR = monthlyProjectionData[11].totalRevenue * 12;
+
+    return {
+      churnProbability: churnRateVal * 100, // percentage representation, e.g. 4.25%
+      estimatedCLV: clvVal,
+      totalProjectedARR: activeARR,
+      peakMonth12ARR: month12ARR
+    };
+  }, [inputs, pnl.arr, monthlyProjectionData]);
+
+  // Dynamic Break-Even Projection calculation
+  const breakEvenProj = useMemo(() => {
+    let currentRevenue = beStartingRevenue;
+    let currentOpex = beOpex;
+    const revGrowth = beGrowthRate / 100;
+    const opexGrowth = beOpexGrowthRate / 100;
+    
+    interface ProjMonth {
+      monthIndex: number;
+      dateStr: string;
+      revenue: number;
+      opex: number;
+      netIncome: number;
+      cumulativeBurn: number;
+    }
+    
+    const projectionMonths: ProjMonth[] = [];
+    const startDate = new Date(2026, 5, 12); // Start around currently localized date (June 2026)
+    
+    let breakEvenIndex = -1;
+    let cumulativeBurn = 0;
+    let peakFundingNeeded = 0;
+    
+    for (let m = 0; m < 36; m++) { // Project monthly for 3 full years (36 months)
+      const date = new Date(startDate);
+      date.setMonth(startDate.getMonth() + m);
+      const dateStr = date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+      
+      const netIncome = currentRevenue - currentOpex;
+      if (netIncome < 0) {
+        cumulativeBurn += Math.abs(netIncome);
+        if (cumulativeBurn > peakFundingNeeded) {
+          peakFundingNeeded = cumulativeBurn;
+        }
+      }
+      
+      projectionMonths.push({
+        monthIndex: m,
+        dateStr,
+        revenue: Math.round(currentRevenue),
+        opex: Math.round(currentOpex),
+        netIncome: Math.round(netIncome),
+        cumulativeBurn: Math.round(cumulativeBurn)
+      });
+      
+      if (breakEvenIndex === -1 && currentRevenue >= currentOpex) {
+        breakEvenIndex = m;
+      }
+      
+      // Compound monthly growth
+      currentRevenue = currentRevenue * (1 + revGrowth);
+      currentOpex = currentOpex * (1 + opexGrowth);
+    }
+    
+    const maxRevenue = Math.max(...projectionMonths.map(p => p.revenue));
+    const maxOpex = Math.max(...projectionMonths.map(p => p.opex));
+    const maxChartVal = Math.max(maxRevenue, maxOpex, 1000);
+    
+    return {
+      projectionMonths,
+      breakEvenIndex,
+      beMonthName: breakEvenIndex !== -1 ? projectionMonths[breakEvenIndex].dateStr : "Never (within 36m)",
+      monthsToBreakEven: breakEvenIndex !== -1 ? breakEvenIndex : -1,
+      peakFundingNeeded: Math.round(peakFundingNeeded),
+      finalMonthRevenue: projectionMonths[projectionMonths.length - 1].revenue,
+      finalMonthOpex: projectionMonths[projectionMonths.length - 1].opex,
+      maxChartVal
+    };
+  }, [beStartingRevenue, beOpex, beGrowthRate, beOpexGrowthRate]);
+
+  // Dynamic Realistic Parameter Alerts System
+  const inputWarnings = useMemo(() => {
+    const alerts: Array<{
+      key: keyof FinancialInputs;
+      type: "severe" | "warning";
+      title: string;
+      message: string;
+    }> = [];
+
+    // 1. MAU Thresholds
+    if (inputs.mau >= 4500000) {
+      alerts.push({
+        key: "mau",
+        type: "severe",
+        title: "Extreme Scale Strain",
+        message: "Sustaining > 4.5M MAU organically requires intensive advertising or venture-subsidized paid growth budgets that are excluded from base operational cost models."
+      });
+    } else if (inputs.mau <= 25000) {
+      alerts.push({
+        key: "mau",
+        type: "warning",
+        title: "Pre-scale Growth Friction",
+        message: "Below 25K MAU, programmatic ad network fill rates are highly volatile and premium upgrade patterns carry heightened margin risk."
+      });
+    }
+
+    // 2. Conversion Rate Thresholds
+    if (inputs.conversionRate >= 12.0) {
+      alerts.push({
+        key: "conversionRate",
+        type: "severe",
+        title: "Aggressive Premium Transition Model",
+        message: "Subscription conversion rates above 12% are industry outliers for free-to-paid social formats (where average ranges strictly between 3% and 6%)."
+      });
+    } else if (inputs.conversionRate <= 1.5) {
+      alerts.push({
+        key: "conversionRate",
+        type: "warning",
+        title: "Squeezed Subscription Buffer",
+        message: "Under 1.5% premium conversion rate increases the operation's dependency on seasonal custom voice and ad partnerships to cover basic computing costs."
+      });
+    }
+
+    // 3. CPM Rate Thresholds
+    if (inputs.cpmRate >= 14.5) {
+      alerts.push({
+        key: "cpmRate",
+        type: "severe",
+        title: "Premium CPM Ceiling Checked",
+        message: "Sustained Zero-Surveillance non-behavioral CPMs above $14.50 require highly dedicated contextual sponsorship blocks, which typically don't scale globally."
+      });
+    } else if (inputs.cpmRate <= 3.50) {
+      alerts.push({
+        key: "cpmRate",
+        type: "warning",
+        title: "Deficit Advertising Yield",
+        message: "Ads yielding less than $3.50 CPM struggle to offset raw AI voice generation APIs and cloud caching network delivery costs."
+      });
+    }
+
+    return alerts;
+  }, [inputs]);
+
+  // Construct chart display paths
+  const chartPaths = useMemo(() => {
+    if (chartCoordinates.length === 0) return { revPath: "", costPath: "" };
+    
+    const width = 500;
+    const height = 150;
+    const padding = 15;
+
+    const maxMAU = 5000000;
+    // Maximum revenue we anticipate plotting is ~22 million
+    const maxVal = 22000000;
+
+    const points = chartCoordinates.map(coord => {
+      const x = padding + (coord.mau / maxMAU) * (width - 2 * padding);
+      
+      // Calculate Y where higher values are drawn upward
+      const revY = height - padding - (coord.revenue / maxVal) * (height - 2 * padding);
+      const costY = height - padding - (coord.cost / maxVal) * (height - 2 * padding);
+      
+      return { x, revY, costY };
+    });
+
+    let revPath = `M ${points[0].x} ${points[0].revY}`;
+    let costPath = `M ${points[0].x} ${points[0].costY}`;
+    
+    for (let i = 1; i < points.length; i++) {
+      revPath += ` L ${points[i].x} ${points[i].revY}`;
+      costPath += ` L ${points[i].x} ${points[i].costY}`;
+    }
+
+    // Gradient area path for Revenue
+    let revAreaPath = `${revPath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`;
+
+    return { revPath, costPath, revAreaPath, points };
+  }, [chartCoordinates]);
+
+  // Helper formatting values
+  const formatCurrency = (val: number) => {
+    if (Math.abs(val) >= 1000000) {
+      return `$${(val / 1000000).toFixed(2)}M`;
+    }
+    return `$${val.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  };
+
+  const mauWarning = inputWarnings.find(w => w.key === "mau");
+  const conversionWarning = inputWarnings.find(w => w.key === "conversionRate");
+  const cpmWarning = inputWarnings.find(w => w.key === "cpmRate");
+
+  return (
+    <div id="investor-sandbox-container" className="bg-[#0A0A0A] border border-white/5 rounded-none p-6 shadow-2xl flex flex-col h-full text-white overflow-y-auto">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6 border-b border-white/10 pb-4">
+        <TrendingUp className="text-[#C19A6B] w-6 h-6" />
+        <div>
+          <h2 id="pitch-center-title" className="text-base font-serif italic text-white tracking-wide">Investor Pitch Sandbox</h2>
+          <p id="pitch-center-sub" className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Speculative financial projection with unit cost modeling</p>
+        </div>
+      </div>
+
+      {/* Scenario Control Deck */}
+      <div className="bg-[#0D0D0D] border border-white/5 rounded-none p-3.5 mb-6 space-y-3">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            <Columns className="text-[#C19A6B] w-4 h-4" />
+            <div>
+              <span className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase font-bold block">Portfolio Scenario Deck</span>
+              <span className="text-[8px] text-slate-500 font-mono block">Capture slider settings & test business strategies side-by-side</span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            {/* Inline Save Control */}
+            <div className="flex items-center gap-1 border border-white/10 bg-black p-1 w-full sm:w-64">
+              <input
+                type="text"
+                placeholder="Name current setup (e.g. Optimistic Scale)"
+                value={newScenarioName}
+                onChange={(e) => setNewScenarioName(e.target.value)}
+                className="bg-transparent text-[10px] text-white font-mono px-2 py-1 outline-none w-full placeholder-slate-600"
+              />
+              <button
+                onClick={handleSaveScenario}
+                disabled={!newScenarioName.trim()}
+                className="bg-[#C19A6B] hover:bg-[#A98458] disabled:bg-slate-800 disabled:text-slate-550 text-black font-bold font-mono text-[9px] px-2.5 py-1 uppercase tracking-wider shrink-0 transition-all cursor-pointer"
+              >
+                [+] Save
+              </button>
+            </div>
+
+            {/* Run comparison trigger */}
+            <button
+              onClick={() => {
+                if (savedScenarios.length >= 2) {
+                  // Prefill selections if possible
+                  setScenarioAId(savedScenarios[0].id);
+                  setScenarioBId(savedScenarios[savedScenarios.length - 1].id);
+                }
+                setIsCompareModalOpen(true);
+              }}
+              className="px-3 py-2 bg-black border border-[#C19A6B] text-[#C19A6B] hover:bg-[#C19A6B]/10 font-bold font-mono text-[9px] uppercase tracking-widest cursor-pointer shrink-0"
+            >
+              [●] Compare Scenarios Side-By-Side
+            </button>
+          </div>
+        </div>        {/* Existing Saved Configurations quick tags list */}
+        <div className="border-t border-white/5 pt-2">
+          <span className="text-[8px] text-slate-500 font-mono uppercase tracking-wider block mb-1.5">Registered Scenarios (Click to Load as Sliders):</span>
+          <div className="flex overflow-x-auto whitespace-nowrap pb-2 scrollbar-thin scrollbar-thumb-white/10 gap-1.5 max-w-full shrink-0">
+            {savedScenarios.map((scenario) => {
+              const matchesCurrent = 
+                inputs.mau === scenario.inputs.mau &&
+                Math.abs(inputs.conversionRate - scenario.inputs.conversionRate) < 0.05 &&
+                Math.abs(inputs.cpmRate - scenario.inputs.cpmRate) < 0.05;
+
+              return (
+                <div
+                  key={scenario.id}
+                  onClick={() => handleLoadScenario(scenario.inputs)}
+                  className={`group relative flex items-center gap-1.5 px-2 py-1 border text-[9px] font-mono cursor-pointer transition-all shrink-0 ${
+                    matchesCurrent
+                      ? "bg-[#C19A6B]/10 border-[#C19A6B] text-[#C19A6B] font-bold"
+                      : "bg-black/55 border-white/5 text-slate-400 hover:border-white/20 hover:text-white"
+                  }`}
+                >
+                  <span>{scenario.name}</span>
+                  <span className="text-[8px] opacity-65 text-slate-500 group-hover:text-[#C19A6B]">
+                    ({(scenario.inputs.mau / 1000).toFixed(0)}k MAU · {scenario.inputs.conversionRate.toFixed(1)}%)
+                  </span>
+                  {!scenario.id.startsWith("preset-") && (
+                    <button
+                      onClick={(e) => handleDeleteScenario(scenario.id, e)}
+                      className="text-rose-500 hover:text-rose-450 pl-1 border-l border-white/10 ml-0.5"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Unified Growth Scenario Preset Toggle */}
+      <div className="bg-[#0D0D0D] border border-white/5 p-4 mb-6 rounded-none flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <Scale className="text-[#C19A6B] w-4 h-4" />
+            <div>
+              <span className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase font-bold block">Unified Growth Scenario Presets</span>
+              <span className="text-[8px] text-slate-500 font-mono block">Configure all metrics, scaling, and investment risks simultaneously</span>
+            </div>
+          </div>
+          <span className="text-[8px] font-mono border border-white/10 px-1.5 py-0.5 uppercase tracking-wider text-slate-500 bg-black">
+            Active: <span className="text-white font-bold">{growthScenario}</span>
+          </span>
+        </div>
+        
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            onClick={() => applyGrowthScenario("conservative")}
+            className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer text-center flex flex-col justify-center items-center ${
+              growthScenario === "conservative"
+                ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold"
+                : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="font-bold text-[10px]">Conservative</span>
+            <span className="text-[8.5px] opacity-75 mt-0.5 lowercase">Low risk · baseline growth</span>
+          </button>
+          
+          <button
+            onClick={() => applyGrowthScenario("moderate")}
+            className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer text-center flex flex-col justify-center items-center ${
+              growthScenario === "moderate"
+                ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold"
+                : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="font-bold text-[10px]">Moderate</span>
+            <span className="text-[8.5px] opacity-75 mt-0.5 lowercase">Standard target case</span>
+          </button>
+          
+          <button
+            onClick={() => applyGrowthScenario("aggressive")}
+            className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer text-center flex flex-col justify-center items-center ${
+              growthScenario === "aggressive"
+                ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold"
+                : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="font-bold text-[10px]">Aggressive</span>
+            <span className="text-[8.5px] opacity-75 mt-0.5 lowercase">High scale objective</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Benchmarks Selector */}
+      <div className="grid grid-cols-4 gap-2 mb-6">
+        <button
+          onClick={() => applyBenchmark("seed")}
+          className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer ${
+            activeBenchmark === "seed" 
+              ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold" 
+              : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400"
+          }`}
+        >
+          <div className="font-bold text-[10px]">Phase 1: Seed</div>
+          <div className="text-[9px] opacity-75 lowercase">50k MAU (Deficit)</div>
+        </button>
+
+        <button
+          onClick={() => applyBenchmark("mid")}
+          className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer ${
+            activeBenchmark === "mid" 
+              ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold" 
+              : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400"
+          }`}
+        >
+          <div className="font-bold text-[10px]">Phase 2: Mid</div>
+          <div className="text-[9px] opacity-75 lowercase">500k MAU (70% Net)</div>
+        </button>
+
+        <button
+          onClick={() => applyBenchmark("high")}
+          className={`px-3 py-2 text-xs rounded-none font-mono uppercase tracking-wide transition-all cursor-pointer ${
+            activeBenchmark === "high" 
+              ? "bg-black border border-[#C19A6B] text-[#C19A6B] font-bold" 
+              : "bg-[#0F0F0F] border border-white/5 hover:bg-[#111111] text-slate-400"
+          }`}
+        >
+          <div className="font-bold text-[10px]">Phase 3: Scale</div>
+          <div className="text-[9px] opacity-75 lowercase">5M MAU ($253M Run)</div>
+        </button>
+
+        <div className={`px-2 py-2 text-xs rounded-none border flex flex-col justify-center items-center font-mono uppercase ${
+          activeBenchmark === "custom" 
+            ? "bg-[#C19A6B]/10 border-[#C19A6B] text-[#C19A6B]" 
+            : "bg-[#0F0F0F] border-white/5 text-slate-500"
+        }`}>
+          <div className="font-bold tracking-widest text-[9px]">Interactive</div>
+          <div className="text-[8px] lowercase">Custom Tuning</div>
+        </div>
+      </div>
+
+      {/* Sliders Control Pane */}
+      <div className="bg-[#0F0F0F] border border-white/5 rounded-none p-4 mb-6 space-y-4">
+        <h3 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase flex items-center gap-2 mb-2">
+          <Activity className="w-4 h-4 text-[#C19A6B]" /> Adjust Business Lever Inputs
+        </h3>
+        
+        {/* Slider 1: MAU */}
+        <div>
+          <div className="flex justify-between items-center text-xs mb-1 font-mono">
+            <span className="text-slate-300 font-serif italic uppercase text-[11px] flex items-center gap-1.5 flex-wrap">
+              Monthly Active Users (MAU)
+              {mauWarning && (
+                <span className={`text-[7.5px] font-mono uppercase px-1.5 border leading-none py-0.5 font-bold ${
+                  mauWarning.type === "severe" 
+                    ? "text-[#F43F5E] border-rose-500/25 bg-rose-500/5" 
+                    : "text-amber-500 border-amber-500/25 bg-amber-500/5"
+                }`}>
+                  {mauWarning.type === "severe" ? "Unrealistic" : "Warning"}
+                </span>
+              )}
+            </span>
+            <span className="text-[#C19A6B] font-bold">{(inputs.mau).toLocaleString()}</span>
+          </div>
+          <input
+            type="range"
+            min={10000}
+            max={6000000}
+            step={10000}
+            value={inputs.mau}
+            onChange={(e) => handleSliderChange("mau", parseInt(e.target.value))}
+            className="w-full accent-[#C19A6B] h-1 bg-[#1A1A1A] rounded-none cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+            <span>10K</span>
+            <span>1M</span>
+            <span>3M</span>
+            <span>6M MAU</span>
+          </div>
+        </div>
+
+        {/* Slider 2: Conversion Rate */}
+        <div>
+          <div className="flex justify-between items-center text-xs mb-1 font-mono">
+            <span className="text-slate-300 font-serif italic uppercase text-[11px] flex items-center gap-1.5 flex-wrap">
+              Premium Member Conversion
+              {conversionWarning && (
+                <span className={`text-[7.5px] font-mono uppercase px-1.5 border leading-none py-0.5 font-bold ${
+                  conversionWarning.type === "severe" 
+                    ? "text-[#F43F5E] border-rose-500/25 bg-rose-500/5" 
+                    : "text-amber-500 border-amber-500/25 bg-amber-500/5"
+                }`}>
+                  {conversionWarning.type === "severe" ? "Unrealistic" : "Warning"}
+                </span>
+              )}
+            </span>
+            <span className="text-[#C19A6B] font-bold">{inputs.conversionRate.toFixed(1)}%</span>
+          </div>
+          <input
+            type="range"
+            min={0.5}
+            max={15.0}
+            step={0.5}
+            value={inputs.conversionRate}
+            onChange={(e) => handleSliderChange("conversionRate", parseFloat(e.target.value))}
+            className="w-full accent-[#C19A6B] h-1 bg-[#1A1A1A] rounded-none cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+            <span>0.5%</span>
+            <span>5.0%</span>
+            <span>10.0%</span>
+            <span>15% Max</span>
+          </div>
+        </div>
+
+        {/* Slider 3: Declared-Interest Ad CPM */}
+        <div>
+          <div className="flex justify-between items-center text-xs mb-1 font-mono">
+            <span className="text-slate-300 font-serif italic uppercase text-[11px] flex items-center gap-1.5 flex-wrap">
+              Zero-Surveillance Ad CPM <span className="text-[9px] font-mono text-slate-500 border border-white/10 px-1 rounded-none normal-case">Deterministic</span>
+              {cpmWarning && (
+                <span className={`text-[7.5px] font-mono uppercase px-1.5 border leading-none py-0.5 font-bold ${
+                  cpmWarning.type === "severe" 
+                    ? "text-[#F43F5E] border-rose-500/25 bg-rose-500/5" 
+                    : "text-amber-500 border-amber-500/25 bg-amber-500/5"
+                }`}>
+                  {cpmWarning.type === "severe" ? "Unrealistic" : "Warning"}
+                </span>
+              )}
+            </span>
+            <span className="text-[#C19A6B] font-bold">${inputs.cpmRate.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min={2.00}
+            max={18.00}
+            step={0.50}
+            value={inputs.cpmRate}
+            onChange={(e) => handleSliderChange("cpmRate", parseFloat(e.target.value))}
+            className="w-full accent-[#C19A6B] h-1 bg-[#1A1A1A] rounded-none cursor-pointer"
+          />
+          <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+            <span>$2.00 (Standard)</span>
+            <span>$10.00 (Highly Targeted)</span>
+            <span>$18.00 Premium</span>
+          </div>
+        </div>
+
+        {/* Consolidated Feasibility Warning Panel */}
+        {inputWarnings.length > 0 && (
+          <div className="border border-rose-500/20 bg-[#160b0d] p-3 space-y-1.5 rounded-none transition-all mt-4">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-[#F43F5E] animate-pulse" />
+              <span className="text-[9px] text-white font-mono uppercase tracking-wider font-bold">
+                Assumed Business Model Warnings ({inputWarnings.length})
+              </span>
+            </div>
+            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {inputWarnings.map((warning, index) => (
+                <div key={index} className="flex gap-2 items-start text-[9.5px] font-mono leading-relaxed border-t border-white/5 pt-1.5 first:border-t-0 first:pt-0">
+                  <span className={`px-1 py-0.5 border text-[7px] uppercase font-bold shrink-0 mt-0.5 ${
+                    warning.type === "severe"
+                      ? "text-[#F43F5E] border-rose-500/30 bg-rose-950/40"
+                      : "text-amber-500 border-amber-500/30 bg-amber-950/40"
+                  }`}>
+                    {warning.type === "severe" ? "severe" : "warning"}
+                  </span>
+                  <div>
+                    <strong className="text-slate-100 block">{warning.title}</strong>
+                    <span className="text-slate-400 font-sans leading-normal">{warning.message}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sub-tab Selection Bar */}
+      <div className="flex border-b border-white/5 mb-5 font-mono text-[10px] uppercase tracking-wider gap-4 overflow-x-auto scrollbar-none">
+        <button
+          onClick={() => setSubTab("pnl")}
+          className={`pb-1.5 px-1 transition-all border-b-2 font-bold cursor-pointer whitespace-nowrap ${
+            subTab === "pnl"
+              ? "border-[#C19A6B] text-white"
+              : "border-transparent text-slate-500 hover:text-slate-350"
+          }`}
+        >
+          PnL Financial Model
+        </button>
+        <button
+          onClick={() => setSubTab("analytics")}
+          className={`pb-1.5 px-1 transition-all border-b-2 font-bold cursor-pointer whitespace-nowrap ${
+            subTab === "analytics"
+              ? "border-[#C19A6B] text-white"
+              : "border-transparent text-slate-500 hover:text-slate-350"
+          }`}
+        >
+          Growth Analytics
+        </button>
+        <button
+          onClick={() => setSubTab("breakeven")}
+          className={`pb-1.5 px-1 transition-all border-b-2 font-bold cursor-pointer whitespace-nowrap ${
+            subTab === "breakeven"
+              ? "border-[#C19A6B] text-white"
+              : "border-transparent text-slate-500 hover:text-slate-350"
+          }`}
+        >
+          Break-Even Date Planner
+        </button>
+      </div>
+
+      {/* High-Level Investor Key Metrics Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6 bg-black/40 border border-white/5 p-3 rounded-none relative overflow-hidden">
+        {/* Total Projected ARR Card */}
+        <div className="flex items-start gap-3 bg-[#0F0F0F] border border-white/5 p-3.5 relative overflow-hidden group hover:border-[#C19A6B]/30 transition-all rounded-none">
+          <div className="p-2 bg-[#C19A6B]/5 border border-[#C19A6B]/20 text-[#C19A6B]">
+            <TrendingUp className="w-4 h-4" />
+          </div>
+          <div className="space-y-0.5">
+            <span className="text-[9px] text-[#C19A6B] font-mono block tracking-widest uppercase font-bold">Total Projected ARR</span>
+            <span className="text-base font-serif italic text-white block leading-tight">{formatCurrency(summaryMetrics.totalProjectedARR)}</span>
+            <span className="text-[8px] text-slate-500 font-mono block uppercase">
+              Run Rate · peak: {formatCurrency(summaryMetrics.peakMonth12ARR)}
+            </span>
+          </div>
+          <div className="absolute top-1 right-1 opacity-15">
+            <ArrowUpRight className="w-3 h-3 text-[#C19A6B]" />
+          </div>
+        </div>
+
+        {/* Estimated CLV Card */}
+        <div className="flex items-start gap-3 bg-[#0F0F0F] border border-white/5 p-3.5 relative overflow-hidden group hover:border-[#C19A6B]/30 transition-all rounded-none">
+          <div className="p-2 bg-[#C19A6B]/5 border border-[#C19A6B]/20 text-[#C19A6B]">
+            <Coins className="w-4 h-4" />
+          </div>
+          <div className="space-y-0.5">
+            <span className="text-[9px] text-[#C19A6B] font-mono block tracking-widest uppercase font-bold">Estimated CLV</span>
+            <span className="text-base font-serif italic text-white block leading-tight">${summaryMetrics.estimatedCLV.toFixed(2)}</span>
+            <span className="text-[8px] text-slate-500 font-mono block uppercase">
+              sub value per customer lifetime
+            </span>
+          </div>
+        </div>
+
+        {/* Churn Probability Card */}
+        <div className="flex items-start gap-3 bg-[#0F0F0F] border border-white/5 p-3.5 relative overflow-hidden group hover:border-[#F43F5E]/30 transition-all rounded-none">
+          <div className="p-2 bg-rose-500/5 border border-rose-500/20 text-[#F43F5E]">
+            <Percent className="w-4 h-4" />
+          </div>
+          <div className="space-y-0.5">
+            <span className="text-[9px] text-rose-450 font-mono block tracking-widest uppercase font-bold">Churn Probability</span>
+            <span className="text-base font-serif italic text-white block leading-tight">{summaryMetrics.churnProbability.toFixed(2)}%</span>
+            <span className="text-[8px] text-slate-500 font-mono block uppercase">
+              monthly customer attrition risk
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {subTab === "pnl" ? (
+        <>
+          {/* PnL Highlights Bento */}
+          <h3 className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase flex items-center gap-2 mb-3">
+            <Target className="w-4 h-4 text-[#C19A6B]" /> Operational Outcomes
+          </h3>
+          
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="bg-[#0F0F0F] p-3 rounded-none border border-white/5">
+              <span className="text-[9px] text-[#C19A6B] font-mono block tracking-wider uppercase">TOTAL MONTHLY REVENUE</span>
+              <span className="text-lg font-serif italic block text-white mt-1">{formatCurrency(pnl.totalRevenue)}</span>
+              <div className="text-[9px] text-slate-500 border-t border-white/5 pt-1 mt-1 font-mono flex justify-between">
+                <span>Annual Run Rate:</span>
+                <span className="text-white font-medium">{formatCurrency(pnl.arr)}</span>
+              </div>
+            </div>
+
+            <div className="bg-[#0F0F0F] p-3 rounded-none border border-white/5">
+              <span className="text-[9px] text-[#C19A6B] font-mono block tracking-wider uppercase">TOTAL OPERATIONAL COSTS</span>
+              <span className="text-lg font-serif italic block text-slate-300 mt-1">{formatCurrency(pnl.totalCosts)}</span>
+              <div className="text-[9px] text-slate-500 border-t border-white/5 pt-1 mt-1 font-mono flex justify-between">
+                <span>Stripe Gateways:</span>
+                <span className="text-slate-200">{formatCurrency(pnl.stripeFees)}</span>
+              </div>
+            </div>
+
+            <div className="bg-black p-3 rounded-none border border-white/10 col-span-2 flex justify-between items-center relative overflow-hidden">
+              <div>
+                <span className="text-[9px] text-[#C19A6B] font-mono block tracking-wider uppercase">NET OPERATING INCOME</span>
+                <span className={`text-xl font-serif italic block mt-1 ${pnl.netIncome >= 0 ? "text-white" : "text-rose-450"}`}>
+                  {pnl.netIncome >= 0 ? "" : "-"}{formatCurrency(Math.abs(pnl.netIncome))}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-[9px] text-slate-450 font-mono block uppercase">NET PROFIT MARGIN</span>
+                <span className={`text-xs font-mono font-bold mt-1 inline-block px-2.5 py-0.5 border ${pnl.margin >= 0 ? "border-[#C19A6B] text-[#C19A6B] bg-[#C19A6B]/5" : "border-rose-900 text-rose-300 bg-rose-950/20"}`}>
+                  {pnl.margin.toFixed(1)}%
+                </span>
+              </div>
+              <div className={`absolute bottom-0 left-0 h-1 ${pnl.netIncome >= 0 ? "bg-[#C19A6B]" : "bg-rose-500"} w-full opacity-60`}></div>
+            </div>
+          </div>
+
+          {/* Break-even Chart Visualization */}
+          <h3 className="text-[9px] text-slate-400 font-mono tracking-widest uppercase mb-2 flex justify-between items-center">
+            <span>PROJECTIONS CURVE PLOT</span>
+            <span className="text-[9px] font-mono text-slate-500">Scale: 50K - 5M MAU</span>
+          </h3>
+          
+          <div className="bg-black border border-white/5 p-3 mb-6 relative rounded-none">
+            <svg viewBox="0 0 500 150" className="w-full h-28 overflow-visible">
+              <defs>
+                <linearGradient id="gradientRev" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#C19A6B" stopOpacity="0.25" />
+                  <stop offset="100%" stopColor="#C19A6B" stopOpacity="0.0" />
+                </linearGradient>
+              </defs>
+
+              {/* Grids */}
+              <line x1="15" y1="15" x2="485" y2="15" stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" />
+              <line x1="15" y1="75" x2="485" y2="75" stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" />
+              <line x1="15" y1="135" x2="485" y2="135" stroke="rgba(255,255,255,0.03)" strokeDasharray="3 3" />
+
+              {/* Area under Revenue Path */}
+              {chartPaths.revAreaPath && (
+                <path d={chartPaths.revAreaPath} fill="url(#gradientRev)" />
+              )}
+
+              {/* Lines */}
+              {chartPaths.revPath && (
+                <path d={chartPaths.revPath} fill="none" stroke="#C19A6B" strokeWidth="2.5" strokeLinecap="round" />
+              )}
+              {chartPaths.costPath && (
+                <path d={chartPaths.costPath} fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeDasharray="4 2" strokeLinecap="round" />
+              )}
+
+              {/* Plot Dots and Current State indicator */}
+              {chartPaths.points && chartPaths.points.map((p, i) => {
+                const m = chartCoordinates[i].mau;
+                const isCurrent = Math.abs(inputs.mau - m) < 150000 || (i === chartPaths.points.length - 1 && inputs.mau > 4000000);
+                
+                return (
+                  <g key={i}>
+                    <circle cx={p.x} cy={p.revY} r={isCurrent ? "4.5" : "3"} fill="#C19A6B" />
+                    {isCurrent && (
+                      <circle cx={p.x} cy={p.revY} r="7" fill="none" stroke="#C19A6B" strokeWidth="1" className="animate-ping" />
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+
+            <div className="flex justify-between text-[9px] text-[#C19A6B] font-mono pt-1.5 border-t border-white/5">
+              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-[#C19A6B] block"></span> Revenue</span>
+              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-white/40 block"></span> Operational Cost</span>
+              <span className="text-slate-400">Break-Even Point: <span className="text-white hover:underline">~{Math.round(pnl.breakEvenMAU).toLocaleString()} MAU</span></span>
+            </div>
+          </div>
+
+          {/* cost item breakdown list */}
+          <div className="space-y-2 mt-auto border-t border-white/5 pt-4">
+            <h4 className="text-[#C19A6B] font-mono tracking-widest uppercase text-[10px] flex items-center gap-1.5 font-bold">
+              <Award className="w-4 h-4 text-[#C19A6B]" /> Premium Monetization breakdown
+            </h4>
+            <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-350">
+              <div className="flex justify-between bg-black p-2 rounded-none border border-white/5">
+                <span className="text-slate-500">Memberships:</span>
+                <span>{formatCurrency(pnl.subscriptionRev)}</span>
+              </div>
+              <div className="flex justify-between bg-black p-2 rounded-none border border-white/5">
+                <span className="text-slate-500">Declared Ads:</span>
+                <span>{formatCurrency(pnl.monthlyAdRev)}</span>
+              </div>
+              <div className="flex justify-between bg-black p-2 rounded-none border border-white/5">
+                <span className="text-slate-500">Platform SaaS:</span>
+                <span>{formatCurrency(pnl.creatorAddOnRev + pnl.enterpriseSaaSRev)}</span>
+              </div>
+              <div className="flex justify-between bg-black p-2 rounded-none border border-white/5">
+                <span className="text-slate-500">Monthly Expenses:</span>
+                <span className="text-[#C19A6B]">{formatCurrency(pnl.totalCosts)}</span>
+              </div>
+            </div>
+
+            <div className="bg-[#0F0F0F] p-3 rounded-none border border-white/5 text-[9px] text-slate-400 flex items-start gap-2 leading-relaxed">
+              <ShieldCheck className="w-4 h-4 text-[#C19A6B] flex-shrink-0 mt-0.5" />
+              <p>
+                The declared ad ecosystem ensures we charge high-CPM premium ads because visitors explicitly declare interest. There are no tracking mechanisms required. This legal & PR stance protects us against suppression arguments or cookie decay.
+              </p>
+            </div>
+          </div>
+        </>
+      ) : subTab === "breakeven" ? (
+        <div className="space-y-6 animate-fade-in">
+          {/* Custom Break-Even Date Planner UI */}
+          <div className="bg-[#0D0D0D] border border-white/5 p-4 flex flex-col gap-4 rounded-none">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase font-bold flex items-center gap-1.5">
+                  <Calculator className="w-3.5 h-3.5 text-[#C19A6B]" /> SPECULATIVE BREAK-EVEN DESIGNER
+                </h4>
+                <p className="text-[9px] text-slate-400 font-mono lowercase mt-0.5 leading-normal">
+                  model various startup runways, revenue acceleration, and scaling opex horizons over a 36-month period.
+                </p>
+              </div>
+              
+              <button
+                onClick={() => {
+                  setBeStartingRevenue(Math.round(pnl.totalRevenue));
+                  setBeOpex(Math.round(pnl.totalCosts));
+                }}
+                className="bg-[#C19A6B]/10 hover:bg-[#C19A6B]/20 border border-[#C19A6B] text-[#C19A6B] text-[9px] font-mono uppercase tracking-widest px-3 py-1.5 transition-all cursor-pointer flex items-center gap-1 shrink-0 bg-transparent"
+              >
+                <Sparkles className="w-3 h-3" /> Sync Current PnL
+              </button>
+            </div>
+
+            {/* Grid of Sliders */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-white/5 pt-4">
+              {/* Slider 1: Starting Revenue */}
+              <div className="space-y-1 font-mono">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-slate-350 uppercase tracking-widest text-[9px]">Starting Revenue (Mo. 1)</span>
+                  <span className="text-white font-bold">{formatCurrency(beStartingRevenue)}/mo</span>
+                </div>
+                <input
+                  type="range"
+                  min="5000"
+                  max="300000"
+                  step="5000"
+                  value={beStartingRevenue}
+                  onChange={(e) => {
+                    setBeStartingRevenue(Number(e.target.value));
+                    setGrowthScenario("custom");
+                  }}
+                  className="w-full accent-[#C19A6B] bg-slate-900 h-1 rounded-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[8px] text-slate-500">
+                  <span>$5k</span>
+                  <span>$150k</span>
+                  <span>$300k/mo</span>
+                </div>
+              </div>
+
+              {/* Slider 2: Revenue MoM Growth */}
+              <div className="space-y-1 font-mono">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-slate-350 uppercase tracking-widest text-[9px]">Revenue MoM Growth Rate</span>
+                  <span className="text-[#C19A6B] font-bold">+{beGrowthRate}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="40"
+                  step="0.5"
+                  value={beGrowthRate}
+                  onChange={(e) => {
+                    setBeGrowthRate(Number(e.target.value));
+                    setGrowthScenario("custom");
+                  }}
+                  className="w-full accent-[#C19A6B] bg-slate-900 h-1 rounded-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[8px] text-slate-500">
+                  <span>1.0%</span>
+                  <span>20.0%</span>
+                  <span>40.0% MoM</span>
+                </div>
+              </div>
+
+              {/* Slider 3: Starting OpEx */}
+              <div className="space-y-1 font-mono">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-slate-350 uppercase tracking-widest text-[9px]">Initial Monthly OpEx</span>
+                  <span className="text-rose-450 font-bold">{formatCurrency(beOpex)}/mo</span>
+                </div>
+                <input
+                  type="range"
+                  min="10000"
+                  max="400000"
+                  step="5000"
+                  value={beOpex}
+                  onChange={(e) => {
+                    setBeOpex(Number(e.target.value));
+                    setGrowthScenario("custom");
+                  }}
+                  className="w-full accent-[#C19A6B] bg-slate-900 h-1 rounded-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[8px] text-slate-500">
+                  <span>$10k</span>
+                  <span>$250k</span>
+                  <span>$400k/mo</span>
+                </div>
+              </div>
+
+              {/* Slider 4: OpEx MoM Growth */}
+              <div className="space-y-1 font-mono">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-slate-350 uppercase tracking-widest text-[9px]">OpEx MoM Growth Rate</span>
+                  <span className="text-rose-400 font-bold">+{beOpexGrowthRate}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="15"
+                  step="0.5"
+                  value={beOpexGrowthRate}
+                  onChange={(e) => {
+                    setBeOpexGrowthRate(Number(e.target.value));
+                    setGrowthScenario("custom");
+                  }}
+                  className="w-full accent-[#C19A6B] bg-slate-900 h-1 rounded-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[8px] text-slate-500">
+                  <span>0.0% (Flat)</span>
+                  <span>7.5%</span>
+                  <span>15.0% MoM</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Break-Even Calculated Key Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* Spotlight Break-Even Date Card */}
+            <div className="bg-black p-4 border border-[#C19A6B]/30 relative rounded-none flex flex-col justify-between overflow-hidden">
+              <div className="absolute top-0 right-0 w-16 h-16 bg-[#C19A6B]/5 rounded-bl-full border-l border-b border-[#C19A6B]/10 flex items-center justify-center">
+                <Timer className="w-5 h-5 text-[#C19A6B]" />
+              </div>
+              <div>
+                <span className="text-[9px] text-[#C19A6B] font-mono block tracking-widest uppercase font-bold">Planned Break-Even Date</span>
+                <span className="text-2xl font-serif italic text-white block mt-1.5">{breakEvenProj.beMonthName}</span>
+              </div>
+              <div className="mt-3 text-[10px] font-mono text-slate-400 border-t border-white/5 pt-2">
+                <span>Timeline Length: </span>
+                <span className="text-[#C19A6B] font-bold">
+                  {breakEvenProj.monthsToBreakEven !== -1 ? `${breakEvenProj.monthsToBreakEven} month(s)` : "Outside 36-mo Projection"}
+                </span>
+              </div>
+              <div className="absolute bottom-0 left-0 w-full h-1 bg-[#C19A6B]" />
+            </div>
+
+            {/* Peak Funding Needed Card */}
+            <div className="bg-[#0F0F0F] p-4 border border-white/5 relative rounded-none flex flex-col justify-between">
+              <div>
+                <span className="text-[9px] text-slate-400 font-mono block tracking-widest uppercase font-bold">Est. Peak Funding / Cash Burn</span>
+                <span className="text-xl font-serif italic text-rose-450 block mt-1.5">
+                  {formatCurrency(breakEvenProj.peakFundingNeeded)}
+                </span>
+              </div>
+              <div className="mt-3 text-[9px] font-mono text-slate-500 leading-normal border-t border-white/5 pt-2">
+                The minimum total capital infusion required to cover cumulative monthly losses before crossing profitability.
+              </div>
+            </div>
+
+            {/* Target run-rate at year 3 */}
+            <div className="bg-[#0F0F0F] p-4 border border-white/5 relative rounded-none flex flex-col justify-between">
+              <div>
+                <span className="text-[9px] text-slate-400 font-mono block tracking-widest uppercase font-bold">Year 3 Exit Status (Mo. 36)</span>
+                <div className="space-y-1 mt-1.5 font-mono text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Revenue:</span>
+                    <span className="text-white font-bold">{formatCurrency(breakEvenProj.finalMonthRevenue)}/mo</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">OpEx:</span>
+                    <span className="text-slate-350">{formatCurrency(breakEvenProj.finalMonthOpex)}/mo</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 text-[10px] font-mono border-t border-white/5 pt-2 flex justify-between">
+                <span className="text-slate-400">Net Exit:</span>
+                <span className={`font-bold ${breakEvenProj.finalMonthRevenue >= breakEvenProj.finalMonthOpex ? "text-emerald-400" : "text-rose-450"}`}>
+                  {breakEvenProj.finalMonthRevenue >= breakEvenProj.finalMonthOpex ? "+" : ""}
+                  {formatCurrency(breakEvenProj.finalMonthRevenue - breakEvenProj.finalMonthOpex)}/mo
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Run Crossover Chart */}
+          <div className="border border-white/5 bg-black p-4 rounded-none">
+            <h4 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase mb-3 flex justify-between items-center font-bold">
+              <span>Dynamic Crossover Projection Chart (36 Months)</span>
+              <span className="text-[8px] font-mono text-slate-500 uppercase">
+                {breakEvenProj.breakEvenIndex !== -1 ? `X-Over at Month ${breakEvenProj.breakEvenIndex}` : "No Crossover in 36m"}
+              </span>
+            </h4>
+            <div className="h-44">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={breakEvenProj.projectionMonths}
+                  margin={{ top: 5, right: 10, left: -10, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="beGradientRev" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#C19A6B" stopOpacity="0.25" />
+                      <stop offset="100%" stopColor="#C19A6B" stopOpacity="0.0" />
+                    </linearGradient>
+                    <linearGradient id="beGradientOpex" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="rgba(255,255,255,0.1)" stopOpacity="0.1" />
+                      <stop offset="100%" stopColor="rgba(255,255,255,0.1)" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
+                  <XAxis 
+                    dataKey="dateStr" 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                    tickFormatter={(tick) => {
+                      try {
+                        const parts = tick.split(" ");
+                        if (parts.length === 2) {
+                          // Display year label or mid-year to declutter
+                          return parts[0] === "Jun" || parts[0] === "Dec" ? tick : "";
+                        }
+                      } catch {
+                        // fallback
+                      }
+                      return tick;
+                    }}
+                  />
+                  <YAxis 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => {
+                      if (v >= 1000000) return `$${(v/1000000).toFixed(1)}M`;
+                      if (v >= 1000) return `$${(v/1000).toFixed(0)}k`;
+                      return `$${v}`;
+                    }}
+                  />
+                  <Tooltip 
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        const raw = payload[0].payload;
+                        const earnsProfit = raw.revenue >= raw.opex;
+                        return (
+                          <div className="bg-[#080808] border border-white/10 p-2.5 font-mono text-[9px] rounded-none min-w-[180px]">
+                            <p className="text-[#C19A6B] mb-1 border-b border-white/5 pb-1 font-bold uppercase tracking-wider">{label}</p>
+                            <div className="space-y-1">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Revenue:</span>
+                                <span className="text-[#C19A6B] font-bold">{formatCurrency(raw.revenue)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">OpEx:</span>
+                                <span className="text-slate-300">{formatCurrency(raw.opex)}</span>
+                              </div>
+                              <div className="flex justify-between border-t border-white/5 pt-1 font-bold">
+                                <span className="text-slate-400">Net Output:</span>
+                                <span className={earnsProfit ? "text-emerald-400" : "text-rose-450"}>
+                                  {earnsProfit ? "+" : ""}{formatCurrency(raw.revenue - raw.opex)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Area 
+                    type="monotone" 
+                    name="Projected Revenue" 
+                    dataKey="revenue" 
+                    stroke="#C19A6B" 
+                    fill="url(#beGradientRev)" 
+                    strokeWidth={2}
+                  />
+                  <Area 
+                    type="monotone" 
+                    name="Projected OpEx" 
+                    dataKey="opex" 
+                    stroke="rgba(255,255,255,0.4)" 
+                    fill="url(#beGradientOpex)" 
+                    strokeWidth={1.5}
+                    strokeDasharray="4 2"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Fine-grained Timeline Milestones List */}
+          <div className="bg-[#0F0F0F] border border-white/5 p-4 rounded-none">
+            <div className="flex justify-between items-center mb-3">
+              <h4 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase flex items-center gap-1.5 font-bold">
+                <Scale className="w-3.5 h-3.5" /> Quarterly Runway Timeline & Cash-burn milestones
+              </h4>
+              <span className="text-[8px] font-mono text-slate-500 uppercase font-bold">36-Month Milestone Log</span>
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 font-mono text-[9.5px]">
+              {breakEvenProj.projectionMonths
+                .filter(p => p.monthIndex % 3 === 0 || p.monthIndex === breakEvenProj.breakEvenIndex)
+                .sort((a,b) => a.monthIndex - b.monthIndex)
+                .map((p, idx) => {
+                  const earnsProfit = p.revenue >= p.opex;
+                  const isBePoint = p.monthIndex === breakEvenProj.breakEvenIndex;
+                  return (
+                    <div 
+                      key={p.monthIndex} 
+                      className={`flex justify-between items-center p-2 border ${
+                        isBePoint 
+                          ? "border-[#C19A6B] bg-[#C19A6B]/5 animate-pulse" 
+                          : earnsProfit 
+                            ? "border-emerald-500/10 bg-emerald-950/5" 
+                            : "border-white/5 bg-black/40"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${
+                          isBePoint ? "bg-[#C19A6B]" : earnsProfit ? "bg-emerald-400" : "bg-rose-500"
+                        }`} />
+                        <span className="text-white font-bold">{p.dateStr}</span>
+                        <span className="text-slate-500">(Mo. {p.monthIndex + 1})</span>
+                        {isBePoint && (
+                          <span className="text-[8px] uppercase font-bold bg-[#C19A6B] text-black px-1 leading-none py-0.5 ml-1.5">
+                            ★ break-even point reached
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-4 items-center">
+                        <span className="text-slate-400">
+                          Rev: <span className="text-white font-bold">{formatCurrency(p.revenue)}</span>
+                        </span>
+                        <span className="text-slate-500">|</span>
+                        <span className="text-slate-400">
+                          OpEx: <span className="text-slate-200">{formatCurrency(p.opex)}</span>
+                        </span>
+                        <span className="text-slate-500">|</span>
+                        <span className={earnsProfit ? "text-emerald-400 font-bold" : "text-rose-450"}>
+                          {earnsProfit ? "Profit: +" : "Burn: -"}{formatCurrency(Math.abs(p.revenue - p.opex))}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Projection Scenario Control Panel */}
+          <div className="bg-[#0D0D0D] border border-white/5 p-3.5 flex flex-col gap-4 rounded-none">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase font-bold">Projection Model Comparator</h4>
+                <p className="text-[9px] text-slate-400 font-mono lowercase mt-0.5 leading-normal">
+                  Compare baseline <span className="text-white">Aggressive Growth (+6.5% MoM scale)</span> against custom <span className="text-[#F43F5E]">Conservative Growth modeling (+3.0% MoM & -30% premium conversion)</span>.
+                </p>
+              </div>
+              
+              <button
+                onClick={() => setOverlayConservative(prev => !prev)}
+                className={`px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest border transition-all cursor-pointer whitespace-nowrap self-start sm:self-center ${
+                  overlayConservative
+                    ? "bg-[#C19A6B]/10 border-[#C19A6B] text-[#C19A6B] font-bold"
+                    : "bg-black border-white/10 text-slate-400 hover:text-white"
+                }`}
+              >
+                {overlayConservative ? "[●] Overlay Active" : "[ ] Overlay Conservative"}
+              </button>
+            </div>
+
+            {/* Actuals Modifier Slider */}
+            <div className="border-t border-white/5 pt-3 flex flex-col sm:flex-row sm:items-start sm:items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <span className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase font-bold block">Historical Actuals Market Modifier</span>
+                <span className="text-[8px] text-slate-500 font-mono block">Simulate real-world operational tailwinds / headwinds (updates bottom Bar Chart)</span>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-64">
+                <input
+                  type="range"
+                  min="70"
+                  max="130"
+                  value={actualsModifier}
+                  onChange={(e) => setActualsModifier(Number(e.target.value))}
+                  className="w-full accent-[#C19A6B] bg-slate-900 h-1 rounded-none cursor-pointer"
+                />
+                <span className="text-[10px] font-mono text-white font-bold w-12 text-right bg-white/5 px-1.5 py-0.5 border border-white/10 shrink-0">
+                  {actualsModifier}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Dynamic Growth KPIs */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="bg-[#0F0F0F] p-3 border border-white/5 flex flex-col justify-between">
+              <div>
+                <span className="text-[8px] text-[#C19A6B] font-mono block tracking-wider uppercase">M12 AUDIENCE</span>
+                <span className="text-sm font-serif italic block text-white mt-0.5">
+                  {Math.round(monthlyProjectionData[11].mau).toLocaleString()} MAU
+                </span>
+                <span className="text-[8px] text-slate-500 font-mono block mt-1">
+                  +{(6.5 * 11).toFixed(0)}% cumulative compounding
+                </span>
+              </div>
+              {overlayConservative && (
+                <div className="mt-2 pt-1 border-t border-white/5 font-mono text-[8px] leading-tight text-slate-400">
+                  <span className="text-[#F43F5E] block font-bold">{Math.round(monthlyProjectionData[11].consMau).toLocaleString()} MAU</span>
+                  <span className="block text-[7.5px] uppercase">Conservative model</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#0F0F0F] p-3 border border-white/5 flex flex-col justify-between">
+              <div>
+                <span className="text-[8px] text-[#C19A6B] font-mono block tracking-wider uppercase">M12 PREMIUM MEMBERS</span>
+                <span className="text-sm font-serif italic block text-white mt-0.5">
+                  {Math.round(monthlyProjectionData[11].subscribers).toLocaleString()}
+                </span>
+                <span className="text-[8px] text-slate-500 font-mono block mt-1">
+                  At {inputs.conversionRate.toFixed(1)}% conversion
+                </span>
+              </div>
+              {overlayConservative && (
+                <div className="mt-2 pt-1 border-t border-white/5 font-mono text-[8px] leading-tight text-slate-400">
+                  <span className="text-[#F43F5E] block font-bold">{Math.round(monthlyProjectionData[11].consSubscribers).toLocaleString()}</span>
+                  <span className="block text-[7.5px] uppercase">{(inputs.conversionRate * 0.7).toFixed(1)}% conversion</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#0F0F0F] p-3 border border-white/5 flex flex-col justify-between">
+              <div>
+                <span className="text-[8px] text-[#C19A6B] font-mono block tracking-wider uppercase">M12 ARR RUN-RATE</span>
+                <span className="text-sm font-serif italic block text-white mt-0.5">
+                  {formatCurrency(monthlyProjectionData[11].totalRevenue * 12)}
+                </span>
+                <span className="text-[8px] text-slate-500 font-mono block mt-1">
+                  Target projection based on inputs
+                </span>
+              </div>
+              {overlayConservative && (
+                <div className="mt-2 pt-1 border-t border-white/5 font-mono text-[8px] leading-tight text-slate-400">
+                  <span className="text-[#F43F5E] block font-bold">{formatCurrency(monthlyProjectionData[11].consTotalRevenue * 12)}</span>
+                  <span className="block text-[7.5px] uppercase">Conservative ARR</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Graph 1: Subscriber Growth Curve */}
+          <div>
+            <h4 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase mb-2 flex justify-between items-center">
+              <span>Audience vs. Subscriber Growth Trajectory</span>
+              <span className="text-[8px] font-mono text-slate-500 lowercase font-bold">
+                {overlayConservative ? "Comparing: Aggressive (solid) vs. Conservative (dashed)" : "Units: Thousands (k)"}
+              </span>
+            </h4>
+            <div className="bg-black border border-white/5 p-4 rounded-none h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={monthlyProjectionData}
+                  margin={{ top: 5, right: 10, left: -20, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="colorSub" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#C19A6B" stopOpacity={0.35}/>
+                      <stop offset="95%" stopColor="#C19A6B" stopOpacity={0.0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
+                  <XAxis 
+                    dataKey="name" 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                  />
+                  <YAxis 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip 
+                    content={<CustomTooltip />} 
+                    cursor={{ stroke: "rgba(193, 154, 107, 0.25)", strokeWidth: 1.5, strokeDasharray: "3 3" }}
+                  />
+                  <Area 
+                    type="monotone" 
+                    name="Aggressive Audience (k MAU)" 
+                    dataKey="mauK" 
+                    stroke="rgba(255, 255, 255, 0.15)" 
+                    fill="rgba(255, 255, 255, 0.01)" 
+                    strokeWidth={1}
+                  />
+                  <Area 
+                    type="monotone" 
+                    name="Aggressive Members (k Subscribers)" 
+                    dataKey="subscribersK" 
+                    stroke="#C19A6B" 
+                    fill="url(#colorSub)" 
+                    strokeWidth={2}
+                  />
+                  {overlayConservative && (
+                    <>
+                      <Area 
+                        type="monotone" 
+                        name="Conservative Audience (k MAU)" 
+                        dataKey="consMauK" 
+                        stroke="rgba(244, 63, 94, 0.25)" 
+                        fill="rgba(244, 63, 94, 0.01)" 
+                        strokeDasharray="4 4"
+                        strokeWidth={1}
+                      />
+                      <Area 
+                        type="monotone" 
+                        name="Conservative Members (k Subscribers)" 
+                        dataKey="consSubscribersK" 
+                        stroke="#F43F5E" 
+                        fill="rgba(244, 63, 94, 0.03)" 
+                        strokeDasharray="5 5"
+                        strokeWidth={2}
+                      />
+                    </>
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Graph 2: Revenue Conversion Mix */}
+          <div>
+            <h4 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase mb-2 flex justify-between items-center">
+              <span>Speculative Monthly Revenue Conversion</span>
+              <span className="text-[8px] font-mono text-slate-500 lowercase font-bold">
+                {overlayConservative ? "Comparing: Aggressive stack vs. Conservative Total (Dashed Line)" : "Units: USD ($)"}
+              </span>
+            </h4>
+            <div className="bg-black border border-white/5 p-4 rounded-none h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={monthlyProjectionData}
+                  margin={{ top: 5, right: 10, left: -10, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="colorSubRev" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#C19A6B" stopOpacity={0.45}/>
+                      <stop offset="95%" stopColor="#C19A6B" stopOpacity={0.05}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
+                  <XAxis 
+                    dataKey="name" 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                  />
+                  <YAxis 
+                    stroke="rgba(255,255,255,0.3)" 
+                    fontSize={8} 
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => {
+                      if (v >= 1000000) return `$${(v/1000000).toFixed(1)}M`;
+                      if (v >= 1000) return `$${(v/1000).toFixed(0)}k`;
+                      return `$${v}`;
+                    }}
+                  />
+                  <Tooltip 
+                    content={<CustomTooltip />} 
+                    cursor={{ stroke: "rgba(193, 154, 107, 0.25)", strokeWidth: 1.5, strokeDasharray: "3 3" }}
+                  />
+                  <Area 
+                    type="monotone" 
+                    stackId="1"
+                    name="Platform Creator SaaS" 
+                    dataKey="saasRev" 
+                    stroke="rgba(255, 255, 255, 0.15)" 
+                    fill="rgba(255, 255, 255, 0.02)" 
+                    strokeWidth={1}
+                  />
+                  <Area 
+                    type="monotone" 
+                    stackId="1"
+                    name="Spot/Topic CPM Ads" 
+                    dataKey="adRev" 
+                    stroke="rgba(255, 255, 255, 0.35)" 
+                    fill="rgba(255, 255, 255, 0.06)" 
+                    strokeWidth={1}
+                  />
+                  <Area 
+                    type="monotone" 
+                    stackId="1"
+                    name="Core Memberships" 
+                    dataKey="subRev" 
+                    stroke="#C19A6B" 
+                    fill="url(#colorSubRev)" 
+                    strokeWidth={2}
+                  />
+                  {overlayConservative && (
+                    <Area 
+                      type="monotone" 
+                      name="Conservative Total Revenue" 
+                      dataKey="consTotalRevenue" 
+                      stroke="#F43F5E" 
+                      fill="rgba(244, 63, 94, 0.02)" 
+                      strokeDasharray="5 5"
+                      strokeWidth={2.5}
+                    />
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-[8px] font-mono text-slate-500 uppercase tracking-wider mt-2.5 text-center">
+              Compounding revenue shifts to membership fee dominance as conversion scales
+            </p>
+          </div>
+
+          {/* Graph 3: Projected vs. Actual Revenue streams over a 12-month period */}
+          <div>
+            <h4 className="text-[9px] text-[#C19A6B] font-mono tracking-widest uppercase mb-2 flex justify-between items-center">
+              <span>Projected vs. Actual Revenue Streams</span>
+              <div className="flex items-center gap-1.5 bg-black p-0.5 border border-white/5">
+                <button
+                  onClick={() => setShowDetailedRevenueTable(false)}
+                  className={`px-1.5 py-0.5 text-[7.5px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
+                    !showDetailedRevenueTable
+                      ? "bg-[#C19A6B] text-black font-bold"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Chart
+                </button>
+                <button
+                  onClick={() => setShowDetailedRevenueTable(true)}
+                  className={`px-1.5 py-0.5 text-[7.5px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
+                    showDetailedRevenueTable
+                      ? "bg-[#C19A6B] text-black font-bold"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Table
+                </button>
+              </div>
+            </h4>
+            
+            {showDetailedRevenueTable ? (
+              <div className="space-y-2">
+                {/* Dynamic Warning Threshold Configuration */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-2 border border-white/5 bg-black/40 font-mono text-[9px] text-slate-450">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0 animate-pulse" />
+                    <span>Sustainable Growth Threshold: <span className="text-white font-bold">{formatCurrency(sustainableThreshold)}</span>/mo</span>
+                    {monthlyProjectionData.some(m => m.totalRevenue < sustainableThreshold) ? (
+                      <span className="text-[7.5px] bg-rose-950/40 text-rose-450 border border-rose-900/30 px-1 py-0.5 uppercase font-bold leading-none shrink-0">
+                        {monthlyProjectionData.filter(m => m.totalRevenue < sustainableThreshold).length} mo flagged
+                      </span>
+                    ) : (
+                      <span className="text-[7.5px] bg-emerald-950/40 text-emerald-400 border border-emerald-900/30 px-1 py-0.5 uppercase font-bold leading-none shrink-0 font-sans tracking-wide">
+                        all months secure
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 justify-between sm:justify-start">
+                    <span className="text-[8px] text-slate-500">$20k</span>
+                    <input
+                      type="range"
+                      min="20000"
+                      max="1000000"
+                      step="20000"
+                      value={sustainableThreshold}
+                      onChange={(e) => setSustainableThreshold(Number(e.target.value))}
+                      className="accent-[#C19A6B] bg-slate-900 h-1 w-24 sm:w-32 rounded-none cursor-pointer"
+                    />
+                    <span className="text-[8px] text-slate-500">$1M</span>
+                  </div>
+                </div>
+
+                <div className="bg-black border border-white/5 p-2 rounded-none h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 font-mono text-[8.5px]">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-white/10 text-[#C19A6B] uppercase font-bold text-[8px] tracking-wider bg-black sticky top-0 pb-1.5 z-10">
+                        <th className="pb-1">Mo</th>
+                        <th className="pb-1 text-right">Audience (MAU)</th>
+                        <th className="pb-1 text-right">Premium Subs</th>
+                        <th className="pb-1 text-right">Sub Rev</th>
+                        <th className="pb-1 text-right">Ad Rev</th>
+                        <th className="pb-1 text-right">SaaS/Add-on</th>
+                        <th className="pb-1 text-right text-white">Projected Rev</th>
+                        <th className="pb-1 text-right text-[#5E81AC]">Sim Actual</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyProjectionData.map((row, idx) => {
+                        const isUnderThreshold = row.totalRevenue < sustainableThreshold;
+                        return (
+                          <tr 
+                            key={idx} 
+                            className={`border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer ${
+                              selectedMonthIndex === idx ? "bg-white/5 text-white" : "text-slate-350"
+                            } ${isUnderThreshold ? "bg-rose-950/5 hover:bg-rose-950/10" : ""}`}
+                            onClick={() => setSelectedMonthIndex(idx)}
+                          >
+                            <td className="py-1 font-bold text-slate-300">
+                              <div className="flex items-center gap-1">
+                                {isUnderThreshold && (
+                                  <AlertTriangle 
+                                    className="w-2.5 h-2.5 text-rose-500 shrink-0" 
+                                    title={`Below configured sustainable threshold of ${formatCurrency(sustainableThreshold)}`} 
+                                  />
+                                )}
+                                {row.name.replace("Month ", "M")}
+                              </div>
+                            </td>
+                            <td className="py-1 text-right text-slate-400">{row.mau.toLocaleString()}</td>
+                            <td className="py-1 text-right text-[#C19A6B]">{row.subscribers.toLocaleString()}</td>
+                            <td className="py-1 text-right text-slate-300">{formatCurrency(row.subRev)}</td>
+                            <td className="py-1 text-right text-slate-300">{formatCurrency(row.adRev)}</td>
+                            <td className="py-1 text-right text-slate-300">{formatCurrency(row.saasRev)}</td>
+                            <td className="py-1 text-right font-bold">
+                              <div className="flex items-center justify-end gap-1">
+                                {isUnderThreshold && (
+                                  <span className="inline-block px-1 py-0.2 bg-rose-950/60 text-rose-500 border border-rose-900/40 text-[7px] font-bold uppercase tracking-wider scale-95 origin-right leading-none">
+                                    warn
+                                  </span>
+                                )}
+                                <span className={isUnderThreshold ? "text-rose-400" : "text-white"}>
+                                  {formatCurrency(row.totalRevenue)}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-1 text-right text-[#5E81AC] font-bold">{formatCurrency(row.actualRevenue)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-black border border-white/5 p-4 rounded-none h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={monthlyProjectionData}
+                    margin={{ top: 5, right: 10, left: -10, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
+                    <XAxis 
+                      dataKey="name" 
+                      stroke="rgba(255,255,255,0.3)" 
+                      fontSize={8} 
+                      tickLine={false}
+                    />
+                    <YAxis 
+                      stroke="rgba(255,255,255,0.3)" 
+                      fontSize={8} 
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v) => {
+                        if (v >= 1000000) return `$${(v/1000000).toFixed(1)}M`;
+                        if (v >= 1000) return `$${(v/1000).toFixed(0)}k`;
+                        return `$${v}`;
+                      }}
+                    />
+                    <Tooltip 
+                      content={<CustomTooltip />} 
+                      cursor={{ fill: "rgba(255, 255, 255, 0.05)" }}
+                    />
+                    <Legend 
+                      verticalAlign="top" 
+                      height={20} 
+                      content={(props) => {
+                        const { payload } = props;
+                        if (!payload) return null;
+                        return (
+                          <div className="flex justify-center gap-4 text-[8px] font-mono mb-2 uppercase tracking-wider">
+                            {payload.map((entry: any, index: number) => (
+                              <span key={`item-${index}`} className="flex items-center gap-1.5">
+                                <span className="inline-block w-2 h-2" style={{ backgroundColor: entry.color }} />
+                                <span className="text-slate-400">{entry.value}</span>
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar 
+                      name="Projected Revenue" 
+                      dataKey="totalRevenue" 
+                      fill="#C19A6B" 
+                      radius={[1, 1, 0, 0]}
+                    />
+                    <Bar 
+                      name="Actual Revenue" 
+                      dataKey="actualRevenue" 
+                      fill="#5E81AC" 
+                      radius={[1, 1, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <p className="text-[8px] font-mono text-slate-500 uppercase tracking-wider mt-2.5 text-center">
+              {showDetailedRevenueTable 
+                ? "Click on any row to load the granular segment drill-down breakdown below" 
+                : "Averages show standard historical variance coupled with custom market multiplier shifts"}
+            </p>
+          </div>
+
+          {/* New Granular Segment Revenue Drill-down Selector */}
+          <div className="border border-white/5 bg-[#0F0F0F] p-4 mt-6">
+            <div className="flex flex-col gap-1 mb-4">
+              <h3 className="text-[10px] text-[#C19A6B] font-mono tracking-widest uppercase flex items-center gap-2">
+                <Target className="w-4 h-4 text-[#C19A6B]" /> Granular Revenue Segmentation Drill-Down
+              </h3>
+              <p className="text-[9px] text-slate-500 font-mono uppercase">
+                Deconstruct projected incomes by selecting a month below
+              </p>
+            </div>
+
+            {/* Compact Month Selection Tabs */}
+            <div className="grid grid-cols-12 gap-0.5 mb-5 font-mono text-[9px] text-center border border-white/5 p-1 bg-black">
+              {Array.from({ length: 12 }).map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setSelectedMonthIndex(idx)}
+                  className={`py-1 transition-all cursor-pointer ${
+                    selectedMonthIndex === idx
+                      ? "bg-[#C19A6B] text-black font-bold font-mono"
+                      : "text-slate-500 hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  M{idx + 1}
+                </button>
+              ))}
+            </div>
+
+            {/* Split Pane Details */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+              {/* Left: Recharts Donut Pie Chart */}
+              <div className="h-40 flex items-center justify-center relative bg-black border border-white/5 p-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={drilldownData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={35}
+                      outerRadius={55}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {drilldownData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number) => [`$${value.toLocaleString()}`, "Revenue"]}
+                      contentStyle={{
+                        backgroundColor: "#000",
+                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        fontFamily: "monospace",
+                        fontSize: "10px"
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                
+                {/* Absolute text in the direct center of the donut */}
+                <div className="absolute inset-x-0 top-[40%] text-center pointer-events-none">
+                  <span className="text-[8px] text-slate-500 uppercase tracking-widest font-mono block">Total</span>
+                  <span className="text-[10px] font-mono font-bold text-white block">
+                    ${Math.round(
+                      drilldownData.reduce((acc, curr) => acc + curr.value, 0)
+                    ).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Right: Rich metric list and calculation breakdowns */}
+              <div className="space-y-2.5">
+                {drilldownData.map((seg, idx) => {
+                  const totalVal = drilldownData.reduce((acc, curr) => acc + curr.value, 0);
+                  const percentage = totalVal > 0 ? (seg.value / totalVal) * 100 : 0;
+                  
+                  return (
+                    <div key={idx} className="bg-black border border-white/5 p-2 flex flex-col justify-between">
+                      <div className="flex justify-between items-center text-[10px] font-mono">
+                        <span className="flex items-center gap-1.5 text-white font-medium">
+                          <span className="w-1.5 h-1.5" style={{ backgroundColor: seg.color }} />
+                          {seg.name}
+                        </span>
+                        <span className="text-[#C19A6B] font-bold">
+                          ${Math.round(seg.value).toLocaleString()} <span className="text-slate-500 font-normal text-[9px]">({percentage.toFixed(1)}%)</span>
+                        </span>
+                      </div>
+                      <p className="text-[8px] text-slate-400 font-mono lowercase mt-0.5 leading-tight">
+                        {seg.desc}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic Comparison Modal */}
+      {isCompareModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          {/* Backdrop Closer */}
+          <div className="absolute inset-0 cursor-default" onClick={() => setIsCompareModalOpen(false)} />
+          
+          <div className="bg-[#090909] border border-white/10 w-full max-w-4xl p-6 flex flex-col max-h-[90vh] overflow-hidden rounded-none relative text-white shadow-2xl z-10 animate-in fade-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-white/10 pb-4 mb-4">
+              <div className="flex items-center gap-2.5">
+                <Columns className="w-5 h-5 text-[#C19A6B]" />
+                <div>
+                  <h3 className="text-sm font-serif italic text-white tracking-wide">Strategic Comparison Terminal</h3>
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-[#C19A6B]">Variance Matrix & Strategy Performance Analysis</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsCompareModalOpen(false)}
+                className="text-slate-500 hover:text-white transition-all p-1 bg-white/5 hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Strategy Selectors */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5 bg-[#000] p-3 border border-white/5">
+              <div>
+                <label className="text-[8px] text-slate-500 font-mono uppercase tracking-wider block mb-1 font-bold">Strategy Source A (Baseline)</label>
+                <select
+                  value={scenarioAId}
+                  onChange={(e) => setScenarioAId(e.target.value)}
+                  className="bg-[#0C0C0C] border border-white/10 text-[10px] text-white font-mono rounded-none p-2 w-full outline-none focus:border-[#C19A6B]"
+                >
+                  {savedScenarios.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[8px] text-slate-500 font-mono uppercase tracking-wider block mb-1 font-bold">Strategy Source B (Challenger)</label>
+                <select
+                  value={scenarioBId}
+                  onChange={(e) => setScenarioBId(e.target.value)}
+                  className="bg-[#0C0C0C] border border-white/10 text-[10px] text-white font-mono rounded-none p-2 w-full outline-none focus:border-[#C19A6B]"
+                >
+                  {savedScenarios.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Matrix comparison calculations */}
+            {(() => {
+              const scenarioA = savedScenarios.find(s => s.id === scenarioAId) || savedScenarios[0];
+              const scenarioB = savedScenarios.find(s => s.id === scenarioBId) || savedScenarios[0];
+
+              const perfA = getPnLAndKPIs(scenarioA.inputs);
+              const perfB = getPnLAndKPIs(scenarioB.inputs);
+
+              const renderVariance = (valA: number, valB: number, isCurrency = false, isPercent = false, invertFavorability = false) => {
+                const diff = valB - valA;
+                const percentChange = valA !== 0 ? (diff / valA) * 100 : 0;
+                
+                const isFavorable = invertFavorability ? diff < 0 : diff > 0;
+                const isUnchanged = Math.abs(diff) < 0.0001;
+
+                let formattedDiff = "";
+                if (isCurrency) {
+                  formattedDiff = (diff >= 0 ? "+" : "-") + formatCurrency(Math.abs(diff));
+                } else if (isPercent) {
+                  formattedDiff = (diff >= 0 ? "+" : "") + diff.toFixed(1) + "%";
+                } else {
+                  formattedDiff = (diff >= 0 ? "+" : "") + Math.round(diff).toLocaleString();
+                }
+
+                if (isUnchanged) {
+                  return <span className="text-slate-500 font-mono text-[9px]">— Parity</span>;
+                }
+
+                return (
+                  <div className="flex flex-col items-end">
+                    <span className={`text-[10px] font-mono font-bold ${isFavorable ? "text-[#C19A6B]" : "text-[#F43F5E]"}`}>
+                      {formattedDiff}
+                    </span>
+                    <span className={`text-[7.5px] font-mono ${isFavorable ? "text-[#C19A6B]/80" : "text-[#F43F5E]/80"}`}>
+                      ({diff >= 0 ? "+" : ""}{percentChange.toFixed(1)}%)
+                    </span>
+                  </div>
+                );
+              };
+
+              return (
+                <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                  {/* Summary Comparison cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                    <div className="bg-[#0C0C0C] border border-white/5 p-2 px-3">
+                      <span className="text-[7.5px] text-slate-400 font-mono uppercase tracking-wider block">ARR Difference</span>
+                      <span className={`text-xs font-serif italic block mt-0.5 ${(perfB.arr - perfA.arr) >= 0 ? "text-[#C19A6B] font-bold" : "text-[#F43F5E] font-bold"}`}>
+                        {formatCurrency(perfB.arr - perfA.arr)}
+                      </span>
+                      <span className="text-[7.5px] text-slate-500 font-mono uppercase block mt-1">
+                        {perfA.arr !== 0 ? (((perfB.arr - perfA.arr) / perfA.arr) * 100).toFixed(1) : "0"}% shift
+                      </span>
+                    </div>
+
+                    <div className="bg-[#0C0C0C] border border-white/5 p-2 px-3">
+                      <span className="text-[7.5px] text-slate-400 font-mono uppercase tracking-wider block">Operating Cost Impact</span>
+                      <span className={`text-xs font-serif italic block mt-0.5 ${(perfB.totalCosts - perfA.totalCosts) <= 0 ? "text-[#C19A6B] font-bold" : "text-[#F43F5E] font-bold"}`}>
+                        {formatCurrency(perfB.totalCosts - perfA.totalCosts)}
+                      </span>
+                      <span className="text-[7.5px] text-slate-500 font-mono uppercase block mt-1">
+                        cost variance index
+                      </span>
+                    </div>
+
+                    <div className="bg-[#0C0C0C] border border-white/5 p-2 px-3">
+                      <span className="text-[7.5px] text-slate-400 font-mono uppercase tracking-wider block">Margin Delta</span>
+                      <span className={`text-xs font-serif italic block mt-0.5 ${(perfB.margin - perfA.margin) >= 0 ? "text-[#C19A6B] font-bold" : "text-[#F43F5E] font-bold"}`}>
+                        {(perfB.margin - perfA.margin).toFixed(1)}%
+                      </span>
+                      <span className="text-[7.5px] text-slate-500 font-mono uppercase block mt-1">
+                        point percentage delta
+                      </span>
+                    </div>
+
+                    <div className="bg-[#0C0C0C] border border-white/5 p-2 px-3 col-span-2 md:col-span-1">
+                      <span className="text-[7.5px] text-slate-400 font-mono uppercase tracking-wider block">CLV Variance</span>
+                      <span className={`text-xs font-serif italic block mt-0.5 ${(perfB.estimatedCLV - perfA.estimatedCLV) >= 0 ? "text-[#C19A6B] font-bold" : "text-[#F43F5E]"}`}>
+                        ${(perfB.estimatedCLV - perfA.estimatedCLV).toFixed(2)}
+                      </span>
+                      <span className="text-[7.5px] text-slate-500 font-mono uppercase block mt-1">
+                        customer loyalty yield
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Matrix Detail Table */}
+                  <div className="border border-white/5 bg-black overflow-hidden select-none">
+                    <table className="w-full text-left font-mono text-[9px] border-collapse">
+                      <thead>
+                        <tr className="bg-[#0C0C0C] border-b border-white/10 uppercase tracking-widest text-[#C19A6B] text-[8px] font-bold">
+                          <th className="p-2 pl-3">Lever Segment / Metric KPI</th>
+                          <th className="p-2 text-right">A: {scenarioA.name}</th>
+                          <th className="p-2 text-right">B: {scenarioB.name}</th>
+                          <th className="p-2 text-right pr-3">Variance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {/* INPUT LEVERS */}
+                        <tr className="bg-white/[0.02] border-b border-white/5 select-none">
+                          <td colSpan={4} className="p-2 pl-3 font-serif italic text-slate-400 font-semibold text-[10px]">Strategic Slider Inputs</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Monthly Active Users (MAU)</td>
+                          <td className="p-2 text-right font-bold text-white">{scenarioA.inputs.mau.toLocaleString()}</td>
+                          <td className="p-2 text-right font-bold text-white">{scenarioB.inputs.mau.toLocaleString()}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(scenarioA.inputs.mau, scenarioB.inputs.mau)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Premium Member Conversion</td>
+                          <td className="p-2 text-right font-bold text-white">{scenarioA.inputs.conversionRate.toFixed(1)}%</td>
+                          <td className="p-2 text-right font-bold text-white">{scenarioB.inputs.conversionRate.toFixed(1)}%</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(scenarioA.inputs.conversionRate, scenarioB.inputs.conversionRate, false, false)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Zero-Surveillance Ad CPM</td>
+                          <td className="p-2 text-right font-bold text-white">${scenarioA.inputs.cpmRate.toFixed(2)}</td>
+                          <td className="p-2 text-right font-bold text-white">${scenarioB.inputs.cpmRate.toFixed(2)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(scenarioA.inputs.cpmRate, scenarioB.inputs.cpmRate, true)}</td>
+                        </tr>
+
+                        {/* OUTCOME REVENUES */}
+                        <tr className="bg-white/[0.02] border-b border-white/5 select-none mt-4">
+                          <td colSpan={4} className="p-2 pl-3 font-serif italic text-slate-400 font-semibold text-[10px]">Monthly Revenue Components</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Premium Memberships Revenues</td>
+                          <td className="p-2 text-right text-[#C19A6B] font-bold">{formatCurrency(perfA.subscriptionRev)}</td>
+                          <td className="p-2 text-right text-[#C19A6B] font-bold">{formatCurrency(perfB.subscriptionRev)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.subscriptionRev, perfB.subscriptionRev, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Zero-Surveillance Ad Sales</td>
+                          <td className="p-2 text-right text-white">{formatCurrency(perfA.monthlyAdRev)}</td>
+                          <td className="p-2 text-right text-white">{formatCurrency(perfB.monthlyAdRev)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.monthlyAdRev, perfB.monthlyAdRev, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Platform SaaS & Custom Models</td>
+                          <td className="p-2 text-right text-white">{formatCurrency(perfA.creatorAddOnRev + perfA.enterpriseSaaSRev)}</td>
+                          <td className="p-2 text-right text-white">{formatCurrency(perfB.creatorAddOnRev + perfB.enterpriseSaaSRev)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.creatorAddOnRev + perfA.enterpriseSaaSRev, perfB.creatorAddOnRev + perfB.enterpriseSaaSRev, true)}</td>
+                        </tr>
+
+                        {/* OPERATIONS & MARGINS */}
+                        <tr className="bg-white/[0.02] border-b border-white/5 select-none mt-4">
+                          <td colSpan={4} className="p-2 pl-3 font-serif italic text-slate-400 font-semibold text-[10px]">Monthly Expenses & Performance Outcomes</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Total Operating Expenses (OpEx)</td>
+                          <td className="p-2 text-right text-slate-450">{formatCurrency(perfA.totalCosts)}</td>
+                          <td className="p-2 text-right text-slate-450">{formatCurrency(perfB.totalCosts)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.totalCosts, perfB.totalCosts, true, false, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Net Operating Income</td>
+                          <td className={`p-2 text-right font-bold ${perfA.netIncome >= 0 ? "text-emerald-450" : "text-rose-450"}`}>{formatCurrency(perfA.netIncome)}</td>
+                          <td className={`p-2 text-right font-bold ${perfB.netIncome >= 0 ? "text-emerald-450" : "text-rose-450"}`}>{formatCurrency(perfB.netIncome)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.netIncome, perfB.netIncome, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Net Profit Margin %</td>
+                          <td className="p-2 text-right text-white font-bold">{perfA.margin.toFixed(1)}%</td>
+                          <td className="p-2 text-right text-white font-bold">{perfB.margin.toFixed(1)}%</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.margin, perfB.margin, false, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Projected Run-rate (ARR)</td>
+                          <td className="p-2 text-right text-white font-bold">{formatCurrency(perfA.arr)}</td>
+                          <td className="p-2 text-right text-white font-bold">{formatCurrency(perfB.arr)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.arr, perfB.arr, true)}</td>
+                        </tr>
+
+                        {/* COHORT RETENTION */}
+                        <tr className="bg-white/[0.02] border-b border-white/5 select-none mt-4">
+                          <td colSpan={4} className="p-2 pl-3 font-serif italic text-slate-400 font-semibold text-[10px]">Cohort Attrition & Life Span Value Metrics</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Monthly Churn Probability</td>
+                          <td className="p-2 text-right text-slate-400">{perfA.churnProbability.toFixed(2)}%</td>
+                          <td className="p-2 text-right text-slate-400">{perfB.churnProbability.toFixed(2)}%</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.churnProbability, perfB.churnProbability, false, true, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01] bg-[#0A0A0A]">
+                          <td className="p-2 pl-4 text-slate-350">Customer Lifetime Value (CLV)</td>
+                          <td className="p-2 text-right text-emerald-400 font-bold">${perfA.estimatedCLV.toFixed(2)}</td>
+                          <td className="p-2 text-right text-emerald-400 font-bold">${perfB.estimatedCLV.toFixed(2)}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.estimatedCLV, perfB.estimatedCLV, true)}</td>
+                        </tr>
+                        <tr className="border-b border-white/5 hover:bg-white/[0.01]">
+                          <td className="p-2 pl-4 text-slate-350">Raw Break-Even Scale (MAU)</td>
+                          <td className="p-2 text-right text-slate-400">{Math.round(perfA.breakEvenMAU).toLocaleString()}</td>
+                          <td className="p-2 text-right text-slate-400">{Math.round(perfB.breakEvenMAU).toLocaleString()}</td>
+                          <td className="p-2 text-right pr-3">{renderVariance(perfA.breakEvenMAU, perfB.breakEvenMAU, false, false, true)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Strategic evaluation note */}
+                  <div className="bg-[#101010] border border-white/5 p-3 rounded-none text-[8.5px] text-slate-400 leading-normal">
+                    <p className="font-mono uppercase text-[#C19A6B] text-[7.5px] font-bold mb-1">PROCTOR ADVISORY NOTE:</p>
+                    {perfB.netIncome - perfA.netIncome > 100000 ? (
+                      <span>
+                        Challenger Strategy (B) optimizes monetization pathways significantly, showing strong bottom-line expansion. Ensure customer acquisition investments scale linearly to offset increased cash operational needs.
+                      </span>
+                    ) : perfA.netIncome - perfB.netIncome > 100000 ? (
+                      <span>
+                        Baseline Strategy (A) displays higher net income performance. Challenger (B) may carry high structural AI caching or system delivery costs that compress yields despite top-line scaling.
+                      </span>
+                    ) : (
+                      <span>
+                        Strategies yield similar bottom-line margins. Select the target blueprint that represents lower subscriber conversion friction or lower transactional processing burden.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Modal Controls */}
+            <div className="flex justify-end gap-3 border-t border-white/10 pt-4 mt-4">
+              <button
+                onClick={() => {
+                  const scenarioA = savedScenarios.find(s => s.id === scenarioAId) || savedScenarios[0];
+                  handleLoadScenario(scenarioA.inputs);
+                  setIsCompareModalOpen(false);
+                }}
+                className="px-3.5 py-1.5 border border-white/20 text-white font-mono hover:bg-white/5 text-[9px] uppercase tracking-wider transition-all cursor-pointer"
+              >
+                [Apply A to Sliders]
+              </button>
+              <button
+                onClick={() => {
+                  const scenarioB = savedScenarios.find(s => s.id === scenarioBId) || savedScenarios[0];
+                  handleLoadScenario(scenarioB.inputs);
+                  setIsCompareModalOpen(false);
+                }}
+                className="px-3.5 py-1.5 border border-[#C19A6B] text-[#C19A6B] font-mono hover:bg-[#C19A6B]/5 text-[9px] uppercase tracking-wider transition-all cursor-pointer"
+              >
+                [Apply B to Sliders]
+              </button>
+              <button
+                onClick={() => setIsCompareModalOpen(false)}
+                className="px-4 py-1.5 bg-[#C19A6B] text-black font-mono font-bold text-[9px] uppercase tracking-wider hover:bg-[#A98458] transition-all cursor-pointer"
+              >
+                [Close]
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
