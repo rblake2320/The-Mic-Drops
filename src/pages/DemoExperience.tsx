@@ -1,18 +1,56 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CreatorStudio from "../components/CreatorStudio";
 import MobileSimulator from "../components/MobileSimulator";
 import InvestorSandbox from "../components/InvestorSandbox";
 import { DEFAULT_DROPS } from "../data";
 import { Drop } from "../types";
-import { 
-  Radio, Cpu, Users, Building, AlertCircle, FileText, 
-  HelpCircle, Sparkles, TrendingUp, Presentation, HeartPulse 
+import {
+  Radio, Cpu, Users, Building, AlertCircle, FileText,
+  HelpCircle, Sparkles, TrendingUp, Presentation, HeartPulse
 } from "lucide-react";
+
+// Fixed design canvas for the side-by-side showcase. The canvas is scaled
+// uniformly (slide-deck style) so BOTH panels always fit the browser window.
+const CANVAS_W = 1280;
+const CANVAS_H = 766;
+
+function useFitScale(remeasureKey: string) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState({ scale: 1, fitMode: true });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      // Below ~900px wide, fall back to the stacked responsive layout
+      if (r.width < 900) {
+        setState({ scale: 1, fitMode: false });
+        return;
+      }
+      setState({
+        scale: Math.min(r.width / CANVAS_W, r.height / CANVAS_H, 1),
+        fitMode: true,
+      });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [remeasureKey]);
+
+  return { ref, ...state };
+}
 
 export default function DemoExperience() {
   const [activeTab, setActiveTab] = useState<"showcase" | "pitch">("showcase");
   const [dropsFeed, setDropsFeed] = useState<Drop[]>(DEFAULT_DROPS);
   const [lastPublishedDrop, setLastPublishedDrop] = useState<Drop | null>(null);
+  const { ref: fitRef, scale, fitMode } = useFitScale(activeTab);
 
   // Callback: when creator publishes a new drop from Left Pane
   const handlePublishDrop = (newDrop: Drop) => {
@@ -24,8 +62,14 @@ export default function DemoExperience() {
     }, 150);
   };
 
+  const fitToWindow = activeTab === "showcase" && fitMode;
+
   return (
-    <div className="min-h-screen bg-[#0A0A0A] font-sans text-[#E5E5E5] antialiased flex flex-col">
+    <div
+      className={`bg-[#0A0A0A] font-sans text-[#E5E5E5] antialiased flex flex-col ${
+        fitToWindow ? "h-dvh overflow-hidden" : "min-h-screen"
+      }`}
+    >
       
       {/* Premium Navigation Header Bar */}
       <header className="bg-[#0F0F0F] border-b border-white/10 sticky top-0 z-40 backdrop-blur-md">
@@ -75,29 +119,54 @@ export default function DemoExperience() {
       </header>
 
       {/* Main Boardroom Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col justify-stretch">
-        
-        {/* Showcase tab: side-by-side Creator publishing & Mobile simulator */}
+      <main
+        className={`flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col justify-stretch ${
+          fitToWindow ? "min-h-0 overflow-hidden" : ""
+        }`}
+      >
+        {/* Showcase tab: side-by-side Creator publishing & Mobile simulator.
+            Desktop: fixed design canvas scaled uniformly to fit the window
+            (slide-deck style) so both panels are always fully visible.
+            Narrow windows: original stacked responsive layout. */}
         {activeTab === "showcase" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full items-stretch animate-fade-in">
-            
-            {/* Left Hand: Creator Studio publishing Suite (Takes 7/12 cols) */}
-            <div className="lg:col-span-7 flex flex-col h-[750px]">
-              <CreatorStudio 
-                onPublishDrop={handlePublishDrop} 
-                activeFeed={dropsFeed} 
-              />
-            </div>
-
-            {/* Right Hand: Mobile Device Simulator View (Takes 5/12 cols) */}
-            <div className="lg:col-span-5 flex flex-col h-[750px] justify-center">
-              <MobileSimulator 
-                activeFeed={dropsFeed} 
-                onAddNewDrop={handlePublishDrop}
-                lastPublishedDrop={lastPublishedDrop}
-              />
-            </div>
-
+          <div
+            ref={fitRef}
+            className={
+              fitMode
+                ? "flex-1 min-h-0 flex items-center justify-center overflow-hidden animate-fade-in"
+                : "animate-fade-in"
+            }
+          >
+            {fitMode ? (
+              <div
+                style={{ width: CANVAS_W, height: CANVAS_H, transform: `scale(${scale})` }}
+                className="shrink-0 grid grid-cols-12 gap-6 items-stretch [&_#phone-frame]:w-[370px]! [&_#phone-frame]:h-[720px]! [&_#phone-frame]:aspect-auto!"
+              >
+                <div className="col-span-7 flex flex-col h-[750px]">
+                  <CreatorStudio onPublishDrop={handlePublishDrop} activeFeed={dropsFeed} />
+                </div>
+                <div className="col-span-5 flex flex-col h-[750px] justify-center">
+                  <MobileSimulator
+                    activeFeed={dropsFeed}
+                    onAddNewDrop={handlePublishDrop}
+                    lastPublishedDrop={lastPublishedDrop}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full items-stretch">
+                <div className="lg:col-span-7 flex flex-col h-[750px]">
+                  <CreatorStudio onPublishDrop={handlePublishDrop} activeFeed={dropsFeed} />
+                </div>
+                <div className="lg:col-span-5 flex flex-col h-[750px] justify-center">
+                  <MobileSimulator
+                    activeFeed={dropsFeed}
+                    onAddNewDrop={handlePublishDrop}
+                    lastPublishedDrop={lastPublishedDrop}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
