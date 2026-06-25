@@ -21,6 +21,35 @@ The app is a single-page showcase with three panels (`src/App.tsx`):
 - **AI**: `@google/genai` — `gemini-3.5-flash` for drop generation, `gemini-3.1-flash-tts-preview` for speech synthesis
 - **Fallback**: if `GEMINI_API_KEY` is missing or the API is down, the server falls back to a local persona-styled generator, so the demo always works
 
+## AI Upsell Strategy
+
+AI should be treated as a premium monetization layer, not the base value of the platform. The base product is trusted, source-backed Drops from creators the user chooses to follow. The AI layer should unlock higher-value features once a user or creator already sees value in the channel.
+
+Potential AI upsell features:
+
+- **Ask the Creator Vault** — conversational Q&A grounded only in that creator/channel's approved Drops and source transcripts.
+- **Personal Daily Briefing** — AI selects and summarizes the best Drops for a user's declared interests, streak, saved history, and private circles.
+- **Source-Backed Explainers** — AI expands a Drop into context, key lesson, action step, and original source link.
+- **Creator Studio Copilot** — AI helps creators import content, extract Drops, categorize topics, draft captions, and suggest CTAs.
+- **Circle Summaries** — AI summarizes what a private circle has been saving, echoing, and discussing.
+- **Premium Voice/Audio Drops** — authorized AI narration or voice styling for approved creator content.
+
+Suggested monetization:
+
+| Tier | AI Access |
+|---|---|
+| Free | Manual Drops, basic discovery, limited saves |
+| Plus | Personalized daily briefing, unlimited saves, smart recommendations |
+| Pro | Ask-the-Vault, deeper explainers, advanced search across followed voices |
+| Creator Pro | Studio Copilot, content ingestion, analytics insights, CTA optimization |
+
+Guardrails:
+
+- AI answers must cite or link back to source Drops/transcripts.
+- No unauthorized voice cloning, likeness imitation, or fake creator statements.
+- Creator channels should support human approval before AI-generated Drops are published.
+- The platform should clearly distinguish original creator content, AI-assisted summaries, and parody/fictional content.
+
 ### API endpoints
 
 | Endpoint | Method | Purpose |
