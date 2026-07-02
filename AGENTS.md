@@ -15,7 +15,7 @@ npm run build    # client + server bundles — must pass
 npm run dev      # smoke test on http://localhost:3000
 ```
 
-No test suite exists. The minimum bar for any change: `npm run lint` and `npm run build` both clean, and the dev server serves `GET /` (200) and `GET /api/config` (JSON).
+The minimum bar for any change: `npm run lint`, `npm test` (vitest), and `npm run build` all clean, and the dev server serves `GET /` (200) and `GET /api/config` (JSON). New server logic should ship with unit tests in `tests/` — pure logic belongs in DB-free modules (see `server/provenance/chain.ts`, `server/ingest/parse.ts`) so it stays testable.
 
 ## Layout
 

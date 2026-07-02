@@ -1,24 +1,8 @@
 import { YoutubeTranscript } from "youtube-transcript";
 import { db } from "../db.js";
+import { extractVideoId, parseTimeCode } from "./parse.js";
 
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /youtu\.be\/([^?&\s]+)/,
-    /[?&]v=([^?&\s]+)/,
-    /youtube\.com\/embed\/([^?&\s]+)/,
-    /youtube\.com\/shorts\/([^?&\s]+)/,
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
-}
-
-function parseTimeCode(tc: string): number {
-  const parts = tc.split(":").map(Number).reverse();
-  return parts.reduce((acc, val, i) => acc + val * Math.pow(60, i), 0);
-}
+export { extractVideoId, parseTimeCode } from "./parse.js";
 
 export async function ingestYouTubeVideo(
   youtubeUrl: string,
@@ -34,7 +18,8 @@ export async function ingestYouTubeVideo(
     return { error: "Creator must be AUTHORIZED to ingest real content" };
   }
 
-  const { timeCode, windowSeconds = 120 } = options;
+  const { timeCode } = options;
+  const windowSeconds = Math.min(Math.max(options.windowSeconds ?? 120, 10), 600);
   let transcriptText = "";
 
   try {

@@ -1,19 +1,26 @@
 import { Router } from "express";
 import { db } from "../db.js";
+import { optionalConsumerAuth } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
+import { analyticsEventSchema } from "../schemas.js";
 
 const router = Router();
 
-const VALID_TYPES = ["open", "play", "skip", "subscribe", "unsubscribe", "push_clicked"];
-
-// Record a consumer analytics event
-router.post("/event", async (req, res) => {
-  const { type, consumerId, creatorId, dropId, metadata } = req.body;
-  if (!type || !VALID_TYPES.includes(type)) {
-    return res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(", ")}` });
-  }
+// Record a consumer analytics event.
+// Identity comes from the bearer token when present — NEVER from the body.
+// Anonymous events are allowed but carry no consumerId, so nobody can write
+// poisoned events attributed to another user.
+router.post("/event", optionalConsumerAuth, validateBody(analyticsEventSchema), async (req, res) => {
+  const { type, creatorId, dropId, metadata } = req.body;
 
   await db.analyticsEvent.create({
-    data: { type, consumerId, creatorId, dropId, metadata },
+    data: {
+      type,
+      consumerId: req.consumer?.sub ?? null,
+      creatorId,
+      dropId,
+      metadata,
+    },
   });
 
   res.json({ success: true });

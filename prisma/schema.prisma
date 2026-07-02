@@ -89,6 +89,10 @@ model Drop {
 
   creator         Creator          @relation(fields: [creatorId], references: [id])
   analyticsEvents AnalyticsEvent[]
+
+  @@index([status, dateSent(sort: Desc)])
+  @@index([creatorId, status])
+  @@index([category, status])
 }
 
 model Consumer {
@@ -144,4 +148,21 @@ model AnalyticsEvent {
 
   consumer Consumer? @relation(fields: [consumerId], references: [id])
   drop     Drop?     @relation(fields: [dropId], references: [id])
+
+  @@index([dropId, type])
+  @@index([creatorId, type])
+  @@index([createdAt])
+}
+
+/// Append-only, hash-chained provenance ledger. One entry per published Drop.
+/// entryHash = SHA-256(prevHash || contentHash || anchorHash || dropId || createdAt)
+/// Never update or delete rows — the chain makes tampering evident.
+model ProvenanceEntry {
+  seq         Int      @id @default(autoincrement())
+  dropId      String   @unique
+  contentHash String
+  anchorHash  String
+  prevHash    String
+  entryHash   String   @unique
+  createdAt   DateTime @default(now())
 }

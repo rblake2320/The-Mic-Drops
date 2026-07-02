@@ -1,10 +1,10 @@
 import express from "express";
 import "express-async-errors";
 import cors from "cors";
+import helmet from "helmet";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import dotenv from "dotenv";
 
 import authRoutes from "./server/routes/auth.js";
 import creatorsRoutes from "./server/routes/creators.js";
@@ -16,20 +16,35 @@ import { initQueue } from "./server/queues/dispatcher.js";
 import { startDropWorker } from "./server/workers/dropWorker.js";
 import { ingestYouTubeVideo } from "./server/ingest/youtube.js";
 import { requireCreatorAuth } from "./server/middleware/auth.js";
+import { validateBody } from "./server/middleware/validate.js";
+import { generateDropSchema, ttsSchema, ingestYouTubeSchema } from "./server/schemas.js";
+import { authLimiter, aiLimiter, analyticsLimiter, apiLimiter } from "./server/middleware/rateLimit.js";
+import provenanceRoutes from "./server/routes/provenance.js";
 
-dotenv.config();
+import { env } from "./server/env.js";
 
 const app = express();
-const PORT = parseInt(process.env.PORT ?? "3000", 10);
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
-const API_ONLY = process.env.API_ONLY === "true";
+const PORT = env.PORT;
+const IS_PRODUCTION = env.NODE_ENV === "production";
+const API_ONLY = env.API_ONLY === "true";
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use(express.json({ limit: "5mb" }));
+app.set("trust proxy", 1); // behind nginx — required for correct client IPs in rate limiting
+app.use(
+  helmet({
+    // The SPA loads Google Fonts and inline styles; keep CSP off for the
+    // Vite-served demo, enforce elsewhere. API responses still get the rest
+    // of helmet's headers (nosniff, frameguard, HSTS in production, etc).
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
+);
+app.use(express.json({ limit: "1mb" }));
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  origin: env.CORS_ORIGIN,
   credentials: true,
 }));
+app.use("/api", apiLimiter);
 
 // ── Gemini helpers ────────────────────────────────────────────────────────────
 let aiClient: GoogleGenAI | null = null;
@@ -151,9 +166,8 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
-app.post("/api/drops/generate", async (req, res) => {
+app.post("/api/drops/generate", aiLimiter, validateBody(generateDropSchema), async (req, res) => {
   const { rawInput, creatorName, contextType } = req.body;
-  if (!rawInput) return res.status(400).json({ error: "No input text provided" });
 
   try {
     const ai = getGeminiClient();
@@ -206,9 +220,8 @@ Synthesize into an elegant MIC Drop in their exact voice style, first-person att
   }
 });
 
-app.post("/api/drops/tts", async (req, res) => {
+app.post("/api/drops/tts", aiLimiter, validateBody(ttsSchema), async (req, res) => {
   const { text, voiceName } = req.body;
-  if (!text) return res.status(400).json({ error: "No text specified for synthesis." });
 
   const selectedVoice = voiceName ?? "Zephyr";
   try {
@@ -235,9 +248,8 @@ app.post("/api/drops/tts", async (req, res) => {
 });
 
 // ── YouTube ingest (creator auth required, AUTHORIZED status only) ────────────
-app.post("/api/ingest/youtube", requireCreatorAuth, async (req, res) => {
+app.post("/api/ingest/youtube", requireCreatorAuth, validateBody(ingestYouTubeSchema), async (req, res) => {
   const { youtubeUrl, timeCode, windowSeconds } = req.body;
-  if (!youtubeUrl) return res.status(400).json({ error: "youtubeUrl required" });
 
   const result = await ingestYouTubeVideo(youtubeUrl, req.creator!.creatorId, { timeCode, windowSeconds });
   if ("error" in result) return res.status(400).json(result);
@@ -245,11 +257,12 @@ app.post("/api/ingest/youtube", requireCreatorAuth, async (req, res) => {
 });
 
 // ── Production routes ─────────────────────────────────────────────────────────
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/creators", creatorsRoutes);
 app.use("/api/drops", dropsRoutes);
 app.use("/api/consumer", consumerRoutes);
-app.use("/api/analytics", analyticsRoutes);
+app.use("/api/analytics", analyticsLimiter, analyticsRoutes);
+app.use("/api/provenance", provenanceRoutes);
 
 // ── Global error handler (express-async-errors forwards async rejections here)
 app.use("/api", (err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { db } from "../db.js";
 import { requireConsumerAuth } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
+import { interestsUpdateSchema, pushSubscribeSchema } from "../schemas.js";
 
 const router = Router();
 
@@ -14,7 +16,7 @@ router.get("/me", requireConsumerAuth, async (req, res) => {
 });
 
 // Update declared interests and age gate
-router.patch("/interests", requireConsumerAuth, async (req, res) => {
+router.patch("/interests", requireConsumerAuth, validateBody(interestsUpdateSchema), async (req, res) => {
   const { interests, ageVerified } = req.body;
   await db.consumer.update({
     where: { id: req.consumer!.sub },
@@ -27,11 +29,8 @@ router.patch("/interests", requireConsumerAuth, async (req, res) => {
 });
 
 // Register push subscription
-router.post("/push/subscribe", requireConsumerAuth, async (req, res) => {
+router.post("/push/subscribe", requireConsumerAuth, validateBody(pushSubscribeSchema), async (req, res) => {
   const { endpoint, auth, p256dh } = req.body;
-  if (!endpoint || !auth || !p256dh) {
-    return res.status(400).json({ error: "endpoint, auth, and p256dh required" });
-  }
   await db.consumer.update({
     where: { id: req.consumer!.sub },
     data: { pushEndpoint: endpoint, pushAuth: auth, pushP256dh: p256dh },

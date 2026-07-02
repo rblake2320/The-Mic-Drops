@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { redisConnectionOptions } from "../queues/dispatcher.js";
 import { sendDropToSubscribers } from "../push/index.js";
+import { recordDropProvenance } from "../provenance/ledger.js";
 import { db } from "../db.js";
 
 export function startDropWorker(): Worker | null {
@@ -17,9 +18,23 @@ export function startDropWorker(): Worker | null {
         const { dropId } = job.data as { dropId: string };
         console.log(`[Worker] Processing drop ${dropId}`);
 
-        await db.drop.update({
+        const updated = await db.drop.update({
           where: { id: dropId },
           data: { status: "SENT", sentAt: new Date() },
+        });
+
+        // Scheduled drops enter the provenance chain at the moment they publish.
+        await recordDropProvenance({
+          dropId: updated.id,
+          title: updated.title,
+          content: updated.content,
+          voiceName: updated.voiceName,
+          category: updated.category,
+          anchorTitle: updated.anchorTitle,
+          anchorSource: updated.anchorSource,
+          anchorLink: updated.anchorLink,
+          anchorTimeCode: updated.anchorTimeCode,
+          transcriptContext: updated.transcriptContext,
         });
 
         await sendDropToSubscribers(dropId);
